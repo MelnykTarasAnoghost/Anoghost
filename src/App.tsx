@@ -1,41 +1,32 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import HomePage from './pages/HomePage';
-import ChatRoomPage from './pages/ChatRoomPage';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
-import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
-import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
-import { clusterApiUrl } from '@solana/web3.js';
+import { PhantomWalletAdapter } from '@solana/wallet-adapter-wallets';
+import Home    from './pages/Home';
+import Issue   from './pages/Issue';
+import Verify  from './pages/Verify';
+import Header from './components/Header';
+import Profile from './pages/Profile';
 
-import '@solana/wallet-adapter-react-ui/styles.css';
+const NETWORK = 'https://api.devnet.solana.com';
+const wallets = [new PhantomWalletAdapter()];
 
-const App = () => {
-  const network = WalletAdapterNetwork.Devnet;
-
-  const endpoint = React.useMemo(() => clusterApiUrl(network), [network]);
-
-  const wallets = React.useMemo(
-    () => [
-      new PhantomWalletAdapter(),
-    ],
-    [network]
-  );
-
-  return (
-    <ConnectionProvider endpoint={endpoint}>
-      <WalletProvider wallets={wallets} autoConnect>
-        <WalletModalProvider>
-          <Router>
-            <Routes>
-              <Route path="/" element={<HomePage />} />
-              <Route path="/r" element={<ChatRoomPage />} />
-            </Routes>
-          </Router>
-        </WalletModalProvider>
-      </WalletProvider>
-    </ConnectionProvider>
-  );
-};
+const App = () => (
+  <ConnectionProvider endpoint={NETWORK}>
+    <WalletProvider wallets={wallets} autoConnect>
+      <WalletModalProvider>
+       <Header />
+          <Routes>
+            <Route path="/"        element={<Home   />} />
+            <Route path="/issue"   element={<Issue  />} />
+            <Route path="/verify"  element={<Verify />} />
+            <Route path="/profile"  element={<Profile />} />
+          </Routes>
+   
+      </WalletModalProvider>
+    </WalletProvider>
+  </ConnectionProvider>
+);
 
 export default App;
