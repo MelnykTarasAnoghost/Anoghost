@@ -1,59 +1,54 @@
+# React + TypeScript + Vite
 
-# 🕵️‍♂️ Anoghost — A Privacy-First, Wallet-Based Chat App
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
-Anoghost is a **privacy-first chat application** that lets users join anonymously using their Web3 wallets. No emails, phone numbers, or IP addresses are required. Create **temporary chat rooms**, **DAO boards**, or **token-gated communities** — all protected with cutting-edge cryptographic features like **zk-proofs** and **self-destructing messages**.
+Currently, two official plugins are available:
 
----
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
 
-## 🚀 Features
+## Expanding the ESLint configuration
 
-- 🔐 **Anonymous Login via Phantom Wallet (Web3 Auth)**
-- 🧾 **Token- or NFT-gated Access to Chat Rooms**
-- 🕳️ **Temporary Rooms and DAO Discussion Boards**
-- 🔥 **Self-Destructing Messages**
-- 🛡️ **End-to-End Encryption**
-- 🧠 **zk-Proof Protected Messaging**
-- 🧵 **Ideal for Crypto-Native, Alpha-Sharing Communities**
+If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
 
----
-
-## 🛠️ Tech Stack
-
-### Frontend
-- ⚛️ [React JS](https://reactjs.org/)
-- 🎨 [Tailwind CSS](https://tailwindcss.com/)
-- 💬 [Phantom Wallet Integration](https://phantom.app/)
-- 🔡 [TypeScript](https://www.typescriptlang.org/)
-- ⚡ [Vite](https://vitejs.dev/)
-
-### Backend
-- 🌐 [Node.js](https://nodejs.org/)  
-
----
-
-## 🔐 Authentication
-
-Authentication is handled entirely through Phantom Wallet. No need for personal info. Here's how it works:
-
-1. User connects wallet.
-2. App verifies ownership via cryptographic signature.
-3. Access granted based on wallet content (NFT/token ownership, etc).
-
----
-
-## 🧪 Development & Testing
-
-Use Vite's dev server for hot reload:
-
-```bash
-npm run dev
+```js
+export default tseslint.config({
+  extends: [
+    // Remove ...tseslint.configs.recommended and replace with this
+    ...tseslint.configs.recommendedTypeChecked,
+    // Alternatively, use this for stricter rules
+    ...tseslint.configs.strictTypeChecked,
+    // Optionally, add this for stylistic rules
+    ...tseslint.configs.stylisticTypeChecked,
+  ],
+  languageOptions: {
+    // other options...
+    parserOptions: {
+      project: ['./tsconfig.node.json', './tsconfig.app.json'],
+      tsconfigRootDir: import.meta.dirname,
+    },
+  },
+})
 ```
 
-To build for production:
+You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
 
-```bash
-npm run build
+```js
+// eslint.config.js
+import reactX from 'eslint-plugin-react-x'
+import reactDom from 'eslint-plugin-react-dom'
+
+export default tseslint.config({
+  plugins: {
+    // Add the react-x and react-dom plugins
+    'react-x': reactX,
+    'react-dom': reactDom,
+  },
+  rules: {
+    // other rules...
+    // Enable its recommended typescript rules
+    ...reactX.configs['recommended-typescript'].rules,
+    ...reactDom.configs.recommended.rules,
+  },
+})
 ```
-
-
-
