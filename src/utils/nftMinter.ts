@@ -1,143 +1,160 @@
-// This file is no longer needed as the NFT minting logic has been moved to the backend
-// It's kept here for reference but can be removed
-import { createUmi } from "@metaplex-foundation/umi-bundle-defaults"
-import { walletAdapterIdentity } from "@metaplex-foundation/umi-signer-wallet-adapters"
-import { mplTokenMetadata, createV1, TokenStandard } from "@metaplex-foundation/mpl-token-metadata"
-import { bundlrUploader } from "@metaplex-foundation/umi-uploader-bundlr"
-import { generateSigner, publicKey, percentAmount, sol } from "@metaplex-foundation/umi"
-import { transferSol } from "@metaplex-foundation/mpl-toolbox"
+import {
+  Connection,
+  SystemProgram,
+  Transaction,
+  PublicKey as Web3JsPublicKey,
+  LAMPORTS_PER_SOL,
+  clusterApiUrl,
+  BlockhashWithExpiryBlockHeight,
+  Commitment,
+} from "@solana/web3.js";
+import { Wallet } from "@solana/wallet-adapter-react";
 
-const SOLANA_RPC_ENDPOINT = "https://api.devnet.solana.com"
-const BUNDLR_ADDRESS = "https://devnet.bundlr.network"
+// Wallet address for the DApp to receive upfront payment
+const DAPP_WALLET_ADDRESS = "5MqevyFxj2egKbgmtCGwANqUSBCJ9ebL1LMMrcLtvWJN"; // Replace with your actual DApp wallet address
+const AMOUNT_TO_PAY_SOL = 0; //0.02257 0.01974
 
-export interface NftFormData {
-  name: string
-  description: string
-  date: string
-  imageFile: File
-  roomId: string
-  roomName: string
-  recipientWallets: string[]
+// Corrected API endpoint for the server
+const SERVER_API_MINT_NFT_ENDPOINT = "http://localhost:3001/api/mint"; // Updated endpoint
+
+// Interface for the input parameters of this client-side function
+export interface ClientGenerateNftInput {
+  name: string;
+  description: string;
+  imageFile: File; // The actual image file from a file input
+  recipients: string[]; // For off-chain metadata creators
+  wallet: Wallet | null; // The connected user's wallet adapter
+  symbol?: string;
+  external_url?: string;
+  attributes?: Array<{ trait_type: string; value: string }>;
+  collectionDetails?: { name: string; family: string };
+  sellerFeeBasisPoints?: number;
+  // Optional RPC and Irys URLs if you want the client to suggest them to the server
+  rpcUrl?: string;
+  irysUrl?: string;
 }
 
-export interface NftWallet {
-  publicKey: any
-  signTransaction: any
+// Interface for the expected response from the server's NFT generation endpoint
+export interface NftGenerationServerResponse {
+  mintAddress?: string;
+  transactionSignature?: string; // Solana mint signature (base58 encoded by server)
+  metadataUrl?: string;
+  imageUrl?: string;
+  error?: string; // If an error occurred on the server
 }
 
-export async function mintNftRequest(formData: NftFormData, wallet: NftWallet) {
-  if (!wallet.publicKey || !wallet.signTransaction) {
-    console.error("[API] Wallet not connected or does not support signing.")
-    throw new Error("Wallet not connected or does not support signing.")
+
+export async function callGenerateNftApi({
+  name,
+  description,
+  imageFile,
+  recipients,
+  wallet,
+  symbol = "NFT", // Default symbol
+  external_url = "",
+  attributes = [],
+  collectionDetails = { name: "Custom Collection", family: "Generated NFTs" }, // Default collection details
+  sellerFeeBasisPoints = 500, // Default 5%
+  rpcUrl, // Optional client-provided RPC URL
+  irysUrl, // Optional client-provided Irys URL
+}: ClientGenerateNftInput): Promise<NftGenerationServerResponse> {
+  if (!wallet || !wallet.adapter || !wallet.adapter.publicKey || !wallet.adapter.sendTransaction) {
+    throw new Error("Wallet adapter with public key and sendTransaction method is required.");
   }
 
-  const { name, description, date, imageFile, roomId, roomName, recipientWallets } = formData
-  if (!imageFile) {
-    console.error("[API] Image file is required.")
-    throw new Error("Image file is required for the NFT.")
-  }
+  const userPublicKey = wallet.adapter.publicKey;
+  // Consider making RPC URL and commitment configurable or dynamic based on environment
+  const connection = new Connection(clusterApiUrl("devnet"), "confirmed" as Commitment);
 
-  if (recipientWallets.length === 0) {
-    console.error("[API] At least one recipient wallet is required.")
-    throw new Error("At least one recipient wallet is required.")
-  }
+  let paymentSignature = "";
+  let latestBlockhash: BlockhashWithExpiryBlockHeight;
 
-  const umi = createUmi(SOLANA_RPC_ENDPOINT)
-    .use(walletAdapterIdentity(wallet))
-    .use(mplTokenMetadata())
-    .use(
-      bundlrUploader({
-        address: BUNDLR_ADDRESS,
-        timeout: 60000,
-      }),
-    )
-
+  // Step 1: Upfront SOL Payment (Client-Side)
   try {
-    // Upload the image to Bundlr
-    const imageBuffer = await imageFile.arrayBuffer()
-    const umiImage = {
-      buffer: new Uint8Array(imageBuffer),
-      fileName: imageFile.name,
-      displayName: name,
-      uniqueName: `${imageFile.name}-${Date.now()}`,
-      contentType: imageFile.type || "image/png",
+    console.log(`Initiating SOL payment of ${AMOUNT_TO_PAY_SOL} SOL to ${DAPP_WALLET_ADDRESS}...`);
+    const transaction = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: userPublicKey,
+        toPubkey: new Web3JsPublicKey(DAPP_WALLET_ADDRESS),
+        lamports: AMOUNT_TO_PAY_SOL * LAMPORTS_PER_SOL,
+      })
+    );
+    transaction.feePayer = userPublicKey;
+    latestBlockhash = await connection.getLatestBlockhash("confirmed");
+    transaction.recentBlockhash = latestBlockhash.blockhash;
+
+    // Sign and send the transaction using the wallet adapter
+    paymentSignature = await wallet.adapter.sendTransaction(transaction, connection);
+    console.log("Payment transaction sent, signature:", paymentSignature);
+
+    // Confirm the transaction
+    await connection.confirmTransaction(
+      {
+        blockhash: latestBlockhash.blockhash,
+        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+        signature: paymentSignature,
+      },
+      "confirmed" as Commitment
+    );
+    console.log("Upfront SOL payment successful, signature confirmed:", paymentSignature);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error("SOL Payment Error:", error);
+    throw new Error(`Failed to make the upfront SOL payment: ${errorMessage}`);
+  }
+
+  // Step 2: Call the Server API to Generate NFT
+  try {
+    console.log("Preparing FormData for NFT generation API call...");
+    const formData = new FormData();
+    formData.append("name", name);
+    formData.append("description", description);
+    formData.append("imageFile", imageFile, imageFile.name); // Append the actual file with its name
+    formData.append("recipients", JSON.stringify(recipients));
+    formData.append("symbol", symbol);
+    formData.append("external_url", external_url);
+    formData.append("attributes", JSON.stringify(attributes));
+
+    if (collectionDetails) {
+        formData.append("collectionDetails", JSON.stringify(collectionDetails));
+    }
+    formData.append("sellerFeeBasisPoints", sellerFeeBasisPoints.toString());
+
+    // Optionally pass RPC and Irys URLs if provided by client
+    if (rpcUrl) {
+        formData.append("rpcUrl", rpcUrl);
+    }
+    if (irysUrl) {
+        formData.append("irysUrl", irysUrl);
     }
 
-    // Create metadata with room information
-    const metadataToUpload = {
-      name: name,
-      description: description,
-      image: umiImage,
-      attributes: [
-        { trait_type: "Room ID", value: roomId },
-        { trait_type: "Room Name", value: roomName },
-        { trait_type: "Created Date", value: date },
-      ],
+    // These fields were in your original client code. The server currently doesn't explicitly use them
+    // in its generateNft function's GenerateNftInput, but they could be used for logging or other server-side checks if needed.
+    // formData.append("userPublicKey", userPublicKey.toBase58());
+    // formData.append("paymentSignature", paymentSignature); // The server might want to verify this payment
+
+    console.log(`Sending request to NFT generation server: ${SERVER_API_MINT_NFT_ENDPOINT}`);
+    const response = await fetch(SERVER_API_MINT_NFT_ENDPOINT, {
+      method: "POST",
+      body: formData,
+      // Headers are not typically needed for FormData with fetch, browser sets Content-Type automatically
+    });
+
+    const result: NftGenerationServerResponse = await response.json();
+
+    if (!response.ok) {
+      console.error("Server Error Response:", result);
+      throw new Error(result.error || `Server responded with status ${response.status}`);
     }
 
-    // Upload metadata to Bundlr
-    const metadataUri = await umi.uploader.uploadJson(metadataToUpload)
-    console.log("[API] Metadata uploaded:", metadataUri)
+    console.log("NFT Generation successful, server response:", result);
+    return result;
 
-    // Mint the NFT
-    const mint = generateSigner(umi)
-
-    const createNftTransaction = await createV1(umi, {
-      mint: mint,
-      authority: umi.identity,
-      name: name,
-      uri: metadataUri,
-      sellerFeeBasisPoints: percentAmount(0), // 0% royalties
-      isMutable: true,
-      tokenStandard: TokenStandard.NonFungible,
-    }).sendAndConfirm(umi, { confirm: { commitment: "confirmed" } })
-
-    console.log("[API] NFT created:", createNftTransaction)
-
-    // Drop NFTs to recipient wallets
-    const recipients = []
-    for (const recipientAddress of recipientWallets) {
-      try {
-        // Convert the recipient address to a UMI PublicKey
-        const recipientPublicKey = publicKey(recipientAddress)
-
-        // Transfer a small amount of SOL to the recipient
-        await transferSol(umi, {
-          source: umi.identity,
-          destination: recipientPublicKey,
-          amount: sol(0.001), // 0.001 SOL
-        }).sendAndConfirm(umi, { confirm: { commitment: "confirmed" } })
-
-        console.log(`[API] NFT dropped to ${recipientAddress}`)
-        recipients.push(recipientAddress)
-      } catch (error) {
-        console.error(`[API] Failed to drop NFT to ${recipientAddress}:`, error)
-      }
-    }
-
-    // Return the NFT information
-    return {
-      mint: mint.publicKey.toString(),
-      metadataUri: metadataUri,
-      name,
-      description,
-      image: URL.createObjectURL(imageFile),
-      attributes: [
-        { trait_type: "Room ID", value: roomId },
-        { trait_type: "Room Name", value: roomName },
-        { trait_type: "Created Date", value: date },
-      ],
-      recipients,
-      createdAt: Date.now(),
-    }
-  } catch (error: any) {
-    console.error("[API] Error in mintNftRequest:", error)
-    if (error.cause) {
-      console.error("[API] Error cause:", error.cause)
-    }
-    if (error.message.toLowerCase().includes("bundlr") && error.message.toLowerCase().includes("balance")) {
-      throw new Error("Bundlr insufficient balance. Please ensure your Devnet wallet has enough SOL for storage fees.")
-    }
-    throw error
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error("NFT Generation API Call Error:", error);
+    // It might be useful to inform the user that the payment was made but NFT generation failed,
+    // and provide the paymentSignature for potential refund or retry logic.
+    throw new Error(`NFT generation process failed after payment: ${errorMessage}. Payment signature: ${paymentSignature}`);
   }
 }

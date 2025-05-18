@@ -127,7 +127,7 @@ const ShareRoomModal: React.FC<ShareRoomModalProps> = ({ isOpen, onClose, roomId
 
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-      <div ref={modalRef} className="bg-black rounded-lg w-full max-w-md p-6 border border-[#222222]">
+      <div ref={modalRef} className="bg-black rounded-2xl w-full max-w-md p-6 border border-[#222222]">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-medium flex items-center tracking-tight">
             <Share2 size={20} className="mr-2 text-[#FF4D00]" />
@@ -135,7 +135,7 @@ const ShareRoomModal: React.FC<ShareRoomModalProps> = ({ isOpen, onClose, roomId
           </h2>
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-full flex items-center justify-center text-gray-400 hover:text-white transition-colors border border-[#222222]"
+            className="w-9 h-9 rounded-full flex items-center justify-center text-gray-400 hover:text-white transition-colors border border-[#222222]"
           >
             <X size={16} />
           </button>

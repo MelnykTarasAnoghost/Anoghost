@@ -189,13 +189,14 @@ const ChatRoom: React.FC<ChatRoomProps> = ({ roomData, nickname }) => {
       nickname: string
       participants: Array<{ nickname: string; joinedAt: number }>
     }) => {
+      // Update participants list immediately
       setParticipants(data.participants)
 
       // Add system message about user joining
       setMessages((prev) => [
         ...prev,
         {
-          id: Date.now().toString(),
+          id: `join-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
           sender: "system",
           text: `${data.nickname} joined the room`,
           timestamp: Date.now(),

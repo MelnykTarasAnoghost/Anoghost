@@ -17,11 +17,6 @@ export interface EncryptedMessageData {
     publicKeyJwk: JsonWebKey
   }
   
-  export interface RoomKeyData {
-    roomId: string
-    userKeys: PublicKeyData[]
-  }
-  
   // Add message expiration options
   export enum MessageExpiration {
     NEVER = 0,

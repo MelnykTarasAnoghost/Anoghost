@@ -3,8 +3,7 @@
 import type React from "react"
 import { useState, useEffect, useRef } from "react"
 import { useWallet } from "@solana/wallet-adapter-react"
-import { getSocket, sendMessage, sendLargeData, sharePublicKey, sendEncryptedMessage } from "../services/socket"
-import { FileUpload } from "./FileUpload"
+import { getSocket, sendMessage, sharePublicKey, sendEncryptedMessage } from "../services/socket"
 import {
   generateKeyPair,
   importPublicKey,
@@ -16,7 +15,7 @@ import type { EncryptedMessageData, PublicKeyData } from "../types/encryption"
 import ExpirationSelector from "./ExpirationSelector"
 import MessageExpirationIndicator from "./MessageExpirationIndicator"
 import { MessageExpiration } from "../types/encryption"
-import { Send, Users, Menu, Paperclip } from "lucide-react"
+import { Send, Users, Menu, MessageSquare, UserPlus } from "lucide-react"
 import TypingIndicator from "./TypingIndicator"
 import { useTypingStatus } from "../hooks/useTypingStatus"
 
@@ -44,18 +43,23 @@ interface ChatAreaProps {
   nickname: string
   onToggleLeftSidebar: () => void
   onToggleRightSidebar: () => void
+  isCreator?: boolean
 }
 
-const ChatArea: React.FC<ChatAreaProps> = ({ roomData, nickname, onToggleLeftSidebar, onToggleRightSidebar }) => {
+const ChatArea: React.FC<ChatAreaProps> = ({
+  roomData,
+  nickname,
+  onToggleLeftSidebar,
+  onToggleRightSidebar,
+  isCreator = false,
+}) => {
   const { publicKey } = useWallet()
   const [messages, setMessages] = useState<Message[]>([])
   const [newMessage, setNewMessage] = useState("")
-  const [participants, setParticipants] = useState<Array<{ nickname: string; joinedAt: number }>>(roomData.participants)
   const [isUploading, setIsUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const socket = getSocket()
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const [keyPair, setKeyPair] = useState<KeyPair | null>(null)
   const [participantKeys, setParticipantKeys] = useState<Map<string, CryptoKey>>(new Map())
   const [encryptedMessages, setEncryptedMessages] = useState<Map<string, EncryptedMessageData>>(new Map())
@@ -63,9 +67,21 @@ const ChatArea: React.FC<ChatAreaProps> = ({ roomData, nickname, onToggleLeftSid
   const [messageExpiration, setMessageExpiration] = useState<MessageExpiration>(MessageExpiration.NEVER)
   const [typingUsers, setTypingUsers] = useState<Map<string, string>>(new Map())
   const [isMobileView, setIsMobileView] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Check if there's only one participant (current user)
+  const isAloneInRoom = roomData.participants.length <= 1
 
   // Call the useTypingStatus hook
   useTypingStatus(roomData.roomId, newMessage)
+
+  // Auto-resize textarea as content grows
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto"
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`
+    }
+  }, [newMessage])
 
   // Check for mobile view
   useEffect(() => {
@@ -153,6 +169,11 @@ const ChatArea: React.FC<ChatAreaProps> = ({ roomData, nickname, onToggleLeftSid
       timestamp: number
       expiresAt?: number
     }) => {
+      // Skip messages from ourselves - we already added them locally
+      if (data.sender === nickname) {
+        return
+      }
+
       setMessages((prev) => [...prev, data])
     }
 
@@ -171,13 +192,11 @@ const ChatArea: React.FC<ChatAreaProps> = ({ roomData, nickname, onToggleLeftSid
       nickname: string
       participants: Array<{ nickname: string; joinedAt: number }>
     }) => {
-      setParticipants(data.participants)
-
       // Add system message about user joining
       setMessages((prev) => [
         ...prev,
         {
-          id: Date.now().toString(),
+          id: `join-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
           sender: "system",
           text: `${data.nickname} joined the room`,
           timestamp: Date.now(),
@@ -190,8 +209,6 @@ const ChatArea: React.FC<ChatAreaProps> = ({ roomData, nickname, onToggleLeftSid
       nickname: string
       participants: Array<{ nickname: string; joinedAt: number }>
     }) => {
-      setParticipants(data.participants)
-
       // Add system message about user leaving
       setMessages((prev) => [
         ...prev,
@@ -319,11 +336,11 @@ const ChatArea: React.FC<ChatAreaProps> = ({ roomData, nickname, onToggleLeftSid
       socket.off("messageExpired", handleMessageExpired)
       socket.off("userTypingStatus", handleTypingStatus)
     }
-  }, [socket, roomData.roomName, keyPair, roomData.roomId])
+  }, [socket, roomData.roomName, keyPair, roomData.roomId, nickname])
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newMessage.trim() || !socket || !isEncryptionReady || !keyPair) return
+    if (!newMessage.trim() || !socket || !isEncryptionReady || !keyPair || isAloneInRoom) return
 
     try {
       // Create a message ID locally to track our own messages
@@ -392,35 +409,6 @@ const ChatArea: React.FC<ChatAreaProps> = ({ roomData, nickname, onToggleLeftSid
     setMessages((prev) => prev.filter((msg) => msg.id !== messageId))
   }
 
-  const handleFileUpload = async (file: File) => {
-    if (!socket) return
-
-    try {
-      setIsUploading(true)
-      setUploadProgress(0)
-
-      // Determine file type
-      const fileType = file.type || "application/octet-stream"
-
-      // Send the file
-      const result = await sendLargeData(file, fileType, (progress) => setUploadProgress(progress))
-
-      if (!result.success) {
-        console.error("Error uploading file:", result.error)
-      }
-    } catch (error) {
-      console.error("Error uploading file:", error)
-    } finally {
-      setIsUploading(false)
-      setUploadProgress(0)
-
-      // Reset file input
-      if (fileInputRef.current) {
-        fileInputRef.current.value = ""
-      }
-    }
-  }
-
   // Format timestamp to readable time
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -479,16 +467,18 @@ const ChatArea: React.FC<ChatAreaProps> = ({ roomData, nickname, onToggleLeftSid
     }
 
     if (message.text) {
+      const isOwnMessage = message.sender === nickname
+
       return (
         <div
-          className={`max-w-[80%] p-3 rounded-lg ${
-            message.sender === nickname
-              ? "bg-[#FF4D00] text-black rounded-br-none ml-auto"
-              : "bg-[#1a1a1a] text-white rounded-bl-none"
+          className={`p-3 rounded-lg ${
+            isOwnMessage
+              ? "bg-[#FF4D00] text-black rounded-br-none ml-auto min-w-[120px] max-w-[45%]"
+              : "bg-[#1a1a1a] text-white rounded-bl-none min-w-[100px] max-w-[40%]"
           }`}
         >
-          {message.sender !== nickname && <p className="text-xs font-medium mb-1 opacity-80">{message.sender}</p>}
-          <p className="font-light">{message.text}</p>
+          {!isOwnMessage && <p className="text-xs font-medium mb-1 opacity-80">{message.sender}</p>}
+          <p className="font-light whitespace-pre-wrap break-words">{message.text}</p>
           <div className="flex justify-between items-center mt-1">
             <p className="text-xs opacity-70 font-light">{formatTime(message.timestamp)}</p>
             {message.expiresAt && (
@@ -503,18 +493,19 @@ const ChatArea: React.FC<ChatAreaProps> = ({ roomData, nickname, onToggleLeftSid
     }
 
     if (message.data) {
+      const isOwnMessage = message.sender === nickname
+
       return (
         <div
-          className={`max-w-[80%] p-3 rounded-lg ${
-            message.sender === nickname
-              ? "bg-[#FF4D00] text-black rounded-br-none ml-auto"
-              : "bg-[#1a1a1a] text-white rounded-bl-none"
+          className={`p-3 rounded-lg ${
+            isOwnMessage
+              ? "bg-[#FF4D00] text-black rounded-br-none ml-auto min-w-[120px] max-w-[45%]"
+              : "bg-[#1a1a1a] text-white rounded-bl-none min-w-[100px] max-w-[40%]"
           }`}
         >
-          {message.sender !== nickname && <p className="text-xs font-medium mb-1 opacity-80">{message.sender}</p>}
+          {!isOwnMessage && <p className="text-xs font-medium mb-1 opacity-80">{message.sender}</p>}
           <div className="flex items-center">
-            <Paperclip size={14} className="mr-1" />
-            <p className="font-light">Sent a file</p>
+            <p className="font-light">File attachment</p>
           </div>
           <p className="text-xs opacity-70 mt-1 font-light">{formatTime(message.timestamp)}</p>
         </div>
@@ -528,7 +519,7 @@ const ChatArea: React.FC<ChatAreaProps> = ({ roomData, nickname, onToggleLeftSid
   const messageGroups = groupMessagesByDate()
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full w-full">
       {/* Header */}
       <div className="bg-black p-4 border-b border-[#1a1a1a] flex justify-between items-center">
         <div className="flex items-center">
@@ -544,7 +535,7 @@ const ChatArea: React.FC<ChatAreaProps> = ({ roomData, nickname, onToggleLeftSid
             <h2 className="font-medium text-white text-lg tracking-tight">{roomData.roomName}</h2>
             <div className="text-xs text-gray-400 font-light">
               <span>
-                {participants.length} {participants.length === 1 ? "participant" : "participants"}
+                {roomData.participants.length} {roomData.participants.length === 1 ? "participant" : "participants"}
               </span>
               {isEncryptionReady && <span className="ml-2">• Encrypted</span>}
             </div>
@@ -587,49 +578,56 @@ const ChatArea: React.FC<ChatAreaProps> = ({ roomData, nickname, onToggleLeftSid
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Upload progress bar */}
-      {isUploading && (
-        <div className="p-2 bg-black">
-          <div className="w-full bg-[#0f0f0f] rounded-full h-1">
-            <div className="bg-[#FF4D00] h-1 rounded-full transition-all" style={{ width: `${uploadProgress}%` }}></div>
+      {/* Alone in room message */}
+      {isAloneInRoom && (
+        <div className="p-4 bg-[#0f0f0f] border-t border-[#1a1a1a] text-center">
+          <div className="flex flex-col items-center justify-center space-y-2">
+            <UserPlus size={24} className="text-[#FF4D00]" />
+            <p className="text-gray-400 text-sm">You're the only one in this room</p>
+            <p className="text-xs text-gray-500">
+              {isCreator
+                ? "Invite others to join before sending messages"
+                : "Wait for others to join before sending messages"}
+            </p>
           </div>
-          <p className="text-xs text-center mt-1 text-gray-400 font-light">Uploading: {uploadProgress}%</p>
         </div>
       )}
 
       {/* Message input area */}
       <div className="p-4 bg-black border-t border-[#1a1a1a]">
-        <div className="flex justify-end mb-2">
-          <ExpirationSelector onSelect={setMessageExpiration} currentValue={messageExpiration} />
-        </div>
-
-        <form onSubmit={handleSendMessage} className="flex items-center gap-2">
-          <div className="flex-1 relative">
-            <textarea
-              value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
-              placeholder="Type your message..."
-              className="w-full p-3 pr-10 rounded-lg bg-[#1a1a1a] text-white border-none focus:outline-none focus:ring-1 focus:ring-[#FF4D00] transition-colors font-light resize-none h-12 min-h-[3rem] max-h-32"
-              disabled={isUploading}
-              rows={1}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault()
-                  handleSendMessage(e)
-                }
-              }}
-            />
-            <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400">
-              <FileUpload onFileSelect={handleFileUpload} disabled={isUploading} ref={fileInputRef} />
+        <form onSubmit={handleSendMessage} className="flex flex-col gap-2">
+          <div className="flex items-end gap-2">
+            <div className="flex-1 relative">
+              <div className="absolute left-3 bottom-3 text-gray-400">
+                <MessageSquare size={18} />
+              </div>
+              <textarea
+                ref={textareaRef}
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                placeholder={isAloneInRoom ? "Waiting for others to join..." : "Type your message..."}
+                className="w-full p-3 pl-10 rounded-lg bg-[#1a1a1a] text-white border-none focus:outline-none focus:ring-1 focus:ring-[#FF4D00] transition-colors font-light resize-none min-h-[3rem] max-h-[150px]"
+                disabled={isUploading || isAloneInRoom}
+                rows={1}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey && !isAloneInRoom) {
+                    e.preventDefault()
+                    handleSendMessage(e)
+                  }
+                }}
+              />
+              <div className="absolute right-3 bottom-3 flex items-center space-x-2 text-gray-400">
+                <ExpirationSelector onSelect={setMessageExpiration} currentValue={messageExpiration} />
+              </div>
             </div>
+            <button
+              type="submit"
+              className="bg-[#FF4D00] text-black font-medium p-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-12 w-12"
+              disabled={!newMessage.trim() || isUploading || isAloneInRoom}
+            >
+              <Send size={18} />
+            </button>
           </div>
-          <button
-            type="submit"
-            className="bg-[#FF4D00] text-black font-medium p-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-12 w-12 flex-shrink-0"
-            disabled={!newMessage.trim() || isUploading}
-          >
-            <Send size={18} />
-          </button>
         </form>
       </div>
     </div>

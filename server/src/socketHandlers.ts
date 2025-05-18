@@ -19,6 +19,12 @@ import {
 } from "./helpers"
 
 // Import the mock NFT service at the top of the file
+// - import { generateMockNft, getUserMockNfts } from "./mockNftService"
+
+import { getGhostId, validateGhostId } from "./ghostIdManager"
+
+// Map to store wallet address by socket ID
+const socketToWalletMap = new Map<string, string>()
 
 export function setupSocketHandlers(io: SocketIOServer) {
   io.on("connection", (socket: Socket) => {
@@ -49,17 +55,82 @@ export function setupSocketHandlers(io: SocketIOServer) {
           roomTokens: [],
         })
 
-        console.log(`User registered: ${sanitizedNickname} (Socket: ${socket.id})`)
+        // Store wallet address for this socket
+        socketToWalletMap.set(socket.id, publicKey)
 
-        // Inside the registerUser handler, before emitting userRegistered:
-        // Update the userRegistered emit to include mockNfts
+        console.log(`User registered: ${sanitizedNickname} (Socket: ${socket.id})`)
+        console.log(
+          `[GhostID] Registering user with wallet: ${publicKey.substring(0, 4)}...${publicKey.substring(publicKey.length - 4)}`,
+        )
+
+        // Generate Ghost ID for this user
+        const masterSecret = process.env.GHOST_ID_MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
+        console.log(
+          `[GhostID] Using master secret: ${masterSecret.substring(0, 3)}...${masterSecret.substring(masterSecret.length - 3)}`,
+        )
+        const ghostId = getGhostId(publicKey, masterSecret)
+
         socket.emit("userRegistered", {
           nickname: sanitizedNickname,
-          mockNfts: [],
+          ghostId,
         })
+
+        console.log(`[GhostID] Ghost ID sent to user: ${sanitizedNickname}`)
       } catch (error) {
         console.error("Error in registerUser:", error)
         socket.emit("error", { message: "Failed to register user" })
+      }
+    })
+
+    // Request Ghost ID refresh
+    socket.on("requestGhostId", () => {
+      try {
+        const publicKey = socketToWalletMap.get(socket.id)
+        if (!publicKey) {
+          console.error(`[GhostID] Request failed: No wallet found for socket ${socket.id}`)
+          socket.emit("error", { message: "You must register before requesting a Ghost ID" })
+          return
+        }
+
+        console.log(
+          `[GhostID] Ghost ID requested for wallet: ${publicKey.substring(0, 4)}...${publicKey.substring(publicKey.length - 4)}`,
+        )
+
+        // Generate or retrieve Ghost ID
+        const masterSecret = process.env.GHOST_ID_MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
+        const ghostId = getGhostId(publicKey, masterSecret)
+
+        socket.emit("ghostIdUpdated", { ghostId })
+        console.log(`[GhostID] Ghost ID sent to socket: ${socket.id}`)
+      } catch (error) {
+        console.error("Error in requestGhostId:", error)
+        socket.emit("error", { message: "Failed to get Ghost ID" })
+      }
+    })
+
+    // Force refresh Ghost ID
+    socket.on("forceRefreshGhostId", () => {
+      try {
+        const publicKey = socketToWalletMap.get(socket.id)
+        if (!publicKey) {
+          console.error(`[GhostID] Force refresh failed: No wallet found for socket ${socket.id}`)
+          socket.emit("error", { message: "You must register before refreshing a Ghost ID" })
+          return
+        }
+
+        console.log(
+          `[GhostID] Force refresh requested for wallet: ${publicKey.substring(0, 4)}...${publicKey.substring(publicKey.length - 4)}`,
+        )
+
+        // Force generate a new Ghost ID
+        const masterSecret = process.env.GHOST_ID_MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
+        const ghostId = getGhostId(publicKey, masterSecret, true)
+
+        socket.emit("ghostIdUpdated", { ghostId })
+        console.log(`[GhostID] New Ghost ID sent after force refresh to socket: ${socket.id}`)
+      } catch (error) {
+        console.error("Error in forceRefreshGhostId:", error)
+        socket.emit("error", { message: "Failed to refresh Ghost ID" })
       }
     })
 
@@ -132,9 +203,9 @@ export function setupSocketHandlers(io: SocketIOServer) {
     })
 
     // Request to join a chat room
-    socket.on("requestJoinRoom", (data: { roomId: string; accessToken?: string }) => {
+    socket.on("requestJoinRoom", (data: { roomId: string; accessToken?: string; ghostId?: string }) => {
       try {
-        const { roomId, accessToken } = data
+        const { roomId, accessToken, ghostId } = data
 
         const userSession = userSessions.get(socket.id)
         if (!userSession) {
@@ -160,6 +231,9 @@ export function setupSocketHandlers(io: SocketIOServer) {
           return
         }
 
+        // Check if this user is the original room creator (by public key)
+        const isCreator = isOriginalRoomCreator(room, userSession.publicKey)
+
         // Verify access token if provided
         let hasValidToken = false
         if (accessToken) {
@@ -169,8 +243,27 @@ export function setupSocketHandlers(io: SocketIOServer) {
           }
         }
 
-        // If room is private and user doesn't have a valid token, add to pending
-        if (room.isPrivate && !hasValidToken) {
+        // Verify Ghost ID if provided
+        let hasValidGhostId = false
+        if (ghostId && !hasValidToken) {
+          const masterSecret = process.env.GHOST_ID_MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
+          const result = validateGhostId(ghostId, masterSecret)
+
+          if (result.isValid && result.walletAddress) {
+            // Check if the Ghost ID belongs to the room creator
+            if (result.walletAddress === room.creatorPublicKey) {
+              hasValidGhostId = true
+
+              // Generate a token for this user
+              const token = generateRoomToken(roomId, userSession.publicKey)
+              room.accessTokens.add(token)
+              userSession.roomTokens.push(token)
+            }
+          }
+        }
+
+        // If room is private and user doesn't have a valid token or Ghost ID and is not the creator, add to pending
+        if (room.isPrivate && !hasValidToken && !hasValidGhostId && !isCreator) {
           // Add user to pending participants
           room.pendingParticipants.set(socket.id, {
             socketId: socket.id,
@@ -200,7 +293,13 @@ export function setupSocketHandlers(io: SocketIOServer) {
           return
         }
 
-        // If room is not private or user has a valid token, join immediately
+        // If user is the original creator, update the creator socket ID
+        if (isCreator) {
+          console.log(`Original room creator ${userSession.nickname} is rejoining room ${room.name} (ID: ${roomId})`)
+          room.creatorSocketId = socket.id
+        }
+
+        // If room is not private or user has a valid token or Ghost ID or is the creator, join immediately
         joinRoomDirectly(socket, room, userSession, io)
       } catch (error) {
         console.error("Error in requestJoinRoom:", error)
@@ -825,6 +924,9 @@ export function setupSocketHandlers(io: SocketIOServer) {
         // Clean up user session
         userSessions.delete(socket.id)
 
+        // Remove from wallet map
+        socketToWalletMap.delete(socket.id)
+
         // Clean up any pending large messages from this user
         for (const [messageId, message] of pendingMessages.entries()) {
           if (message.senderId === socket.id) {
@@ -842,34 +944,81 @@ export function setupSocketHandlers(io: SocketIOServer) {
     })
 
     // Add this to the setupSocketHandlers function, inside the io.on("connection", (socket: Socket) => { ... }) block
-    socket.on(
-      "generateMockNft",
-      (data: {
-        name?: string
-        description?: string
-        collectionIndex?: number
-        attributes?: Array<{ trait_type: string; value: string }>
-      }) => {
-        try {
-          const userSession = userSessions.get(socket.id)
-          if (!userSession) {
-            socket.emit("error", { message: "You must register before generating NFTs" })
-            return
-          }
+    // socket.on(
+    //   "generateMockNft",
+    //   (data: {
+    //     name?: string
+    //     description?: string
+    //     collectionIndex?: number
+    //     attributes?: Array<{ trait_type: string; value: string }>
+    //   }) => {
+    //     try {
+    //       const userSession = userSessions.get(socket.id)
+    //       if (!userSession) {
+    //         socket.emit("error", { message: "You must register before generating NFTs" })
+    //         return
+    //       }
 
-          // Generate a mock NFT
-          const nft = null
+    //       // Generate a mock NFT
+    //       const nft = generateMockNft(userSession.publicKey, data)
 
-          // Return the generated NFT
-          socket.emit("mockNftGenerated", { nft })
+    //       // Return the generated NFT
+    //       socket.emit("mockNftGenerated", { nft })
 
-          console.log(`Mock NFT generated for ${userSession.nickname}: ${""} (${""})`)
-        } catch (error) {
-          console.error("Error generating mock NFT:", error)
-          socket.emit("error", { message: "Failed to generate mock NFT" })
+    //       console.log(`Mock NFT generated for ${userSession.nickname}: ${nft.name} (${nft.mint})`)
+    //     } catch (error) {
+    //       console.error("Error generating mock NFT:", error)
+    //       socket.emit("error", { message: "Failed to generate mock NFT" })
+    //     }
+    //   },
+    // )
+
+    // Validate Ghost ID
+    socket.on("validateGhostId", async (data: { ghostId: string }) => {
+      try {
+        const { ghostId } = data
+
+        if (!ghostId || typeof ghostId !== "string") {
+          console.error(`[GhostID] Validation failed: Invalid Ghost ID format`)
+          socket.emit("ghostIdValidationResult", {
+            success: false,
+            error: "Invalid Ghost ID format",
+          })
+          return
         }
-      },
-    )
+
+        console.log(`[GhostID] Validation requested for Ghost ID: ${ghostId.substring(0, 8)}...`)
+
+        // Attempt to decrypt and validate the Ghost ID
+        const masterSecret = process.env.GHOST_ID_MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
+        const result = validateGhostId(ghostId, masterSecret)
+
+        if (result.isValid && result.walletAddress) {
+          // Success - emit the result without the actual wallet address for security
+          console.log(`[GhostID] Validation successful for Ghost ID: ${ghostId.substring(0, 8)}...`)
+          socket.emit("ghostIdValidationResult", {
+            success: true,
+            isValid: true,
+            // Only send a truncated version
+            walletPreview: `${result.walletAddress.substring(0, 4)}...${result.walletAddress.substring(result.walletAddress.length - 4)}`,
+          })
+        } else {
+          // Failed to decrypt
+          console.error(`[GhostID] Validation failed: ${result.error}`)
+          socket.emit("ghostIdValidationResult", {
+            success: false,
+            isValid: false,
+            error: result.error || "Invalid or expired Ghost ID",
+          })
+        }
+      } catch (error) {
+        console.error("Error validating Ghost ID:", error)
+        socket.emit("ghostIdValidationResult", {
+          success: false,
+          error: "Failed to validate Ghost ID",
+        })
+      }
+    })
   })
 }
 
@@ -903,15 +1052,18 @@ function joinRoomDirectly(socket: Socket, room: ChatRoom, userSession: UserSessi
   socketToRoomMap.set(socket.id, room.id)
   socket.join(room.id)
 
-  console.log(`User ${userSession.nickname} joined room ${room.name} (ID: ${room.id})`)
+  // Check if this user is the room creator (either by socket ID or public key)
+  const isCreator = isRoomCreator(room, socket.id) || isOriginalRoomCreator(room, userSession.publicKey)
+
+  console.log(`User ${userSession.nickname} joined room ${room.name} (ID: ${room.id}), isCreator: ${isCreator}`)
 
   // Notify the user they've joined
   socket.emit("roomJoined", {
     roomId: room.id,
     roomName: room.name,
-    isCreator: isRoomCreator(room, socket.id),
+    isCreator: isCreator,
     participants: getParticipantsList(room),
-    pendingParticipants: isRoomCreator(room, socket.id) ? getPendingParticipantsList(room) : [],
+    pendingParticipants: isCreator ? getPendingParticipantsList(room) : [],
   })
 
   // Notify others in the room
@@ -919,4 +1071,8 @@ function joinRoomDirectly(socket: Socket, room: ChatRoom, userSession: UserSessi
     nickname: userSession.nickname,
     participants: getParticipantsList(room),
   })
+}
+
+function isOriginalRoomCreator(room: ChatRoom, publicKey: string): boolean {
+  return room.creatorPublicKey === publicKey
 }

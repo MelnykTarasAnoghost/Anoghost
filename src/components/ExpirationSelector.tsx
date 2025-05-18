@@ -3,7 +3,7 @@
 import type React from "react"
 import { useState, useRef, useEffect } from "react"
 import { MessageExpiration } from "../types/encryption"
-import { Clock, Check } from "lucide-react"
+import { Clock, Check, X } from "lucide-react"
 
 interface ExpirationSelectorProps {
   onSelect: (expiration: MessageExpiration) => void
@@ -63,15 +63,22 @@ const ExpirationSelector: React.FC<ExpirationSelectorProps> = ({ onSelect, curre
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="text-gray-400 hover:text-[#FF4D00] transition-colors"
+        className="text-gray-400 hover:text-[#FF4D00] transition-colors flex items-center"
       >
         <Clock size={18} />
+        <span className="text-xs ml-1 hidden sm:inline">{formatExpiration(currentValue)}</span>
       </button>
 
       {isOpen && (
         <div className="absolute bottom-full right-0 mb-2 p-2 bg-[#1a1a1a] rounded-lg border border-[#333333] text-xs w-40 z-10">
           <div className="flex justify-between items-center mb-2 px-2">
             <span className="text-gray-300 font-medium tracking-tight">Message Expires</span>
+            <button
+              onClick={() => setIsOpen(false)}
+              className="w-5 h-5 rounded-full flex items-center justify-center text-gray-400 hover:text-white"
+            >
+              <X size={12} />
+            </button>
           </div>
           <div className="space-y-1">
             {expirationOptions.map((option) => (

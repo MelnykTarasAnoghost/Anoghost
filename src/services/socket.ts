@@ -2,37 +2,59 @@
 
 import { io, type Socket } from "socket.io-client"
 import { useEffect, useState } from "react"
+import type { JsonWebKey } from "crypto"
 
 // The URL of your Socket.IO server
 const SOCKET_SERVER_URL = "http://localhost:3001"
 
+// Define MAX_CHUNK_SIZE
+const MAX_CHUNK_SIZE = 1024 * 1024 // 1MB
+
 // Create a singleton socket instance
 let socket: Socket | null = null
-
-// For large file transfers
-const MAX_CHUNK_SIZE = 64 * 1024 // 64KB chunks
+let isInitializing = false
 
 export const initializeSocket = (): Socket => {
-  if (!socket) {
-    socket = io(SOCKET_SERVER_URL, {
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-      timeout: 20000,
-    })
+  if (socket) return socket
 
-    // Register connection event handlers
-    socket.on("connect", () => {
-      console.log("Connected to Socket.IO server")
-    })
-
-    socket.on("connect_error", (error) => {
-      console.error("Socket connection error:", error)
-    })
-
-    socket.on("disconnect", (reason) => {
-      console.log("Disconnected from Socket.IO server:", reason)
-    })
+  if (isInitializing) {
+    console.log("Socket already initializing, waiting...")
+    // Return existing socket or create a new one if somehow we got here
+    return (
+      socket ||
+      io(SOCKET_SERVER_URL, {
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000,
+        timeout: 20000,
+        autoConnect: true,
+      })
+    )
   }
+
+  isInitializing = true
+  console.log("Initializing socket connection to", SOCKET_SERVER_URL)
+
+  socket = io(SOCKET_SERVER_URL, {
+    reconnectionAttempts: 5,
+    reconnectionDelay: 1000,
+    timeout: 20000,
+    autoConnect: true,
+  })
+
+  // Register connection event handlers
+  socket.on("connect", () => {
+    console.log("Connected to Socket.IO server")
+    isInitializing = false
+  })
+
+  socket.on("connect_error", (error) => {
+    console.error("Socket connection error:", error)
+    isInitializing = false
+  })
+
+  socket.on("disconnect", (reason) => {
+    console.log("Disconnected from Socket.IO server:", reason)
+  })
 
   return socket
 }
@@ -41,6 +63,7 @@ export const disconnectSocket = (): void => {
   if (socket) {
     socket.disconnect()
     socket = null
+    isInitializing = false
   }
 }
 
@@ -52,14 +75,14 @@ export const getSocket = (): Socket | null => {
 export const registerUser = (
   publicKey: string,
   nickname: string,
-): Promise<{ success: boolean; nickname?: string; error?: string }> => {
+): Promise<{ success: boolean; nickname?: string; ghostId?: string; error?: string }> => {
   return new Promise((resolve) => {
     const socket = getSocket() || initializeSocket()
 
-    const handleRegistered = (data: { nickname: string }) => {
+    const handleRegistered = (data: { nickname: string; ghostId?: string }) => {
       socket.off("userRegistered", handleRegistered)
       socket.off("error", handleError)
-      resolve({ success: true, nickname: data.nickname })
+      resolve({ success: true, nickname: data.nickname, ghostId: data.ghostId })
     }
 
     const handleError = (error: { message: string }) => {
@@ -128,6 +151,7 @@ export const createChatRoom = (
 export const requestJoinRoom = (
   roomId: string,
   accessToken?: string,
+  ghostId?: string,
 ): Promise<{
   success: boolean
   status: "joined" | "pending"
@@ -180,7 +204,7 @@ export const requestJoinRoom = (
     socket.on("joinRequestPending", handleJoinRequestPending)
     socket.on("error", handleError)
 
-    socket.emit("requestJoinRoom", { roomId, accessToken })
+    socket.emit("requestJoinRoom", { roomId, accessToken, ghostId })
   })
 }
 
@@ -450,44 +474,129 @@ export const useSocket = (): {
   const [isConnected, setIsConnected] = useState(false)
   const [socketInstance, setSocketInstance] = useState<Socket | null>(null)
 
-  const connect = () => {
-    const socket = initializeSocket()
+  useEffect(() => {
+    // Initialize socket if it doesn't exist
+    const socket = getSocket() || initializeSocket()
     setSocketInstance(socket)
+
+    const onConnect = () => {
+      console.log("Socket connected in useSocket hook")
+      setIsConnected(true)
+    }
+
+    const onDisconnect = () => {
+      console.log("Socket disconnected in useSocket hook")
+      setIsConnected(false)
+    }
+
+    socket.on("connect", onConnect)
+    socket.on("disconnect", onDisconnect)
+
+    // Set initial connection state
+    setIsConnected(socket.connected)
+
+    // If not connected, try to connect
+    if (!socket.connected) {
+      console.log("Socket not connected, connecting...")
+      socket.connect()
+    }
+
+    return () => {
+      socket.off("connect", onConnect)
+      socket.off("disconnect", onDisconnect)
+    }
+  }, [])
+
+  const connect = () => {
+    const socket = getSocket() || initializeSocket()
+    if (!socket.connected) {
+      socket.connect()
+    }
   }
 
   const disconnect = () => {
     disconnectSocket()
     setSocketInstance(null)
+    setIsConnected(false)
   }
 
-  useEffect(() => {
-    const socket = getSocket()
-    if (socket) {
-      setSocketInstance(socket)
-
-      const onConnect = () => setIsConnected(true)
-      const onDisconnect = () => setIsConnected(false)
-
-      socket.on("connect", onConnect)
-      socket.on("disconnect", onDisconnect)
-
-      // Set initial connection state
-      setIsConnected(socket.connected)
-
-      return () => {
-        socket.off("connect", onConnect)
-        socket.off("disconnect", onDisconnect)
-      }
-    }
-  }, [])
-
-  return { socket: socketInstance, isConnected, connect, disconnect }
+  return {
+    socket: socketInstance,
+    isConnected,
+    connect,
+    disconnect,
+  }
 }
 
-// Add this function to the file
+// Validate a Ghost ID - simplified version that works reliably
+export const validateGhostId = (
+  ghostId: string,
+): Promise<{
+  success: boolean
+  isValid?: boolean
+  error?: string
+}> => {
+  return new Promise((resolve) => {
+    const socket = getSocket() || initializeSocket()
+
+    // Set up a one-time event listener for the validation result
+    const handleValidationResult = (data: any) => {
+      console.log("Received ghostIdValidationResult:", data)
+      socket.off("ghostIdValidationResult", handleValidationResult)
+
+      if (data && typeof data === "object") {
+        resolve({
+          success: true,
+          isValid: data.isValid === true,
+          error: data.error,
+        })
+      } else {
+        resolve({
+          success: false,
+          error: "Invalid response format",
+        })
+      }
+    }
+
+    // Listen for the validation result
+    socket.on("ghostIdValidationResult", handleValidationResult)
+
+    // Set a timeout to prevent hanging
+    const timeout = setTimeout(() => {
+      socket.off("ghostIdValidationResult", handleValidationResult)
+      resolve({
+        success: false,
+        error: "Validation timed out",
+      })
+    }, 5000)
+
+    // Send the validation request
+    console.log("Emitting validateGhostId event with:", ghostId.substring(0, 8) + "...")
+    socket.emit("validateGhostId", { ghostId })
+
+    // Also handle general errors
+    const handleError = (error: { message: string }) => {
+      clearTimeout(timeout)
+      socket.off("ghostIdValidationResult", handleValidationResult)
+      socket.off("error", handleError)
+
+      resolve({
+        success: false,
+        error: error.message || "Error validating GhostID",
+      })
+    }
+
+    socket.on("error", handleError)
+
+    // Clean up the error handler after timeout
+    setTimeout(() => {
+      socket.off("error", handleError)
+    }, 5500)
+  })
+}
 
 // Generate a mock NFT
-export const generateMockNft = (options?: {
+export const generateMockNft = (options: {
   name?: string
   description?: string
   collectionIndex?: number
@@ -500,21 +609,21 @@ export const generateMockNft = (options?: {
       return
     }
 
-    const handleNftGenerated = (data: { nft: any }) => {
-      socket.off("mockNftGenerated", handleNftGenerated)
+    const handleMockNftGenerated = (data: { nft: any }) => {
+      socket.off("mockNftGenerated", handleMockNftGenerated)
       socket.off("error", handleError)
       resolve({ success: true, nft: data.nft })
     }
 
     const handleError = (error: { message: string }) => {
-      socket.off("mockNftGenerated", handleNftGenerated)
+      socket.off("mockNftGenerated", handleMockNftGenerated)
       socket.off("error", handleError)
       resolve({ success: false, error: error.message })
     }
 
-    socket.on("mockNftGenerated", handleNftGenerated)
+    socket.on("mockNftGenerated", handleMockNftGenerated)
     socket.on("error", handleError)
 
-    socket.emit("generateMockNft", options || {})
+    socket.emit("generateMockNft", options)
   })
 }

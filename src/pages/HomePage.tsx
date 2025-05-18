@@ -2,16 +2,63 @@
 
 import { useNavigate } from "react-router-dom"
 import { useWallet } from "@solana/wallet-adapter-react"
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui"
-import { useState } from "react"
+import { useState, useRef, useEffect } from "react"
 import JoinRoomModal from "../components/JoinRoomModal"
-import { ArrowRight, ArrowLeft, ArrowUpRight, ChevronRight, Lock, Shield, Ghost, Hash, Sparkles } from "lucide-react"
+import {
+  ArrowRight,
+  ArrowLeft,
+  ArrowUpRight,
+  Lock,
+  Shield,
+  Ghost,
+  Hash,
+  Sparkles,
+  RefreshCw,
+  Copy,
+  LogOut,
+  ChevronDown,
+} from "lucide-react"
+import GhostIdDisplay from "../components/GhostIdDisplay"
+import CustomWalletSelector from "../components/CustomWalletSelector"
 
 const HomePage = () => {
   const navigate = useNavigate()
-  const { connected } = useWallet()
+  const { connected, disconnect } = useWallet()
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false)
   const [activeSlide, setActiveSlide] = useState(1)
+  const [dropdownOpen, setDropdownOpen] = useState(false)
+  const [isScrolled, setIsScrolled] = useState(false)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
+  // Handle scroll events
+  useEffect(() => {
+    const handleScroll = () => {
+      if (window.scrollY > 20) {
+        setIsScrolled(true)
+      } else {
+        setIsScrolled(false)
+      }
+    }
+
+    window.addEventListener("scroll", handleScroll)
+    return () => {
+      window.removeEventListener("scroll", handleScroll)
+    }
+  }, [])
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setDropdownOpen(false)
+      }
+    }
+
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside)
+    }
+  }, [])
 
   const handleCreateChatRoom = () => {
     navigate("/r")
@@ -27,6 +74,27 @@ const HomePage = () => {
 
   const handleJoinPending = (roomInfo: { roomId: string; roomName: string }) => {
     navigate("/r", { state: { isPendingApproval: true, pendingRoomInfo: roomInfo } })
+  }
+
+  const handleRefreshGhostId = () => {
+    // Access the ghostIdMethods from window
+    if (window && (window as any).ghostIdMethods) {
+      ;(window as any).ghostIdMethods.refresh()
+    }
+    setDropdownOpen(false)
+  }
+
+  const handleCopyGhostId = () => {
+    // Access the ghostIdMethods from window
+    if (window && (window as any).ghostIdMethods) {
+      ;(window as any).ghostIdMethods.copy()
+    }
+    setDropdownOpen(false)
+  }
+
+  const handleDisconnectWallet = () => {
+    disconnect()
+    setDropdownOpen(false)
   }
 
   const nextSlide = () => {
@@ -52,18 +120,14 @@ const HomePage = () => {
     },
   ]
 
-  const currentDate = new Date()
-  const formattedDate = currentDate.toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  })
-
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-white">
       {/* Header */}
-      <header className="fixed top-0 left-0 right-0 z-50 py-4 px-6">
+      <header
+        className={`fixed top-0 left-0 right-0 z-50 py-4 px-6 transition-all duration-300 ${
+          isScrolled ? "bg-[#0A0A0A]/90 backdrop-blur-md shadow-md" : ""
+        }`}
+      >
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <div className="flex items-center">
             <div className="border border-[#333333] rounded-full px-6 py-2 flex items-center">
@@ -71,33 +135,52 @@ const HomePage = () => {
               <span className="text-sm font-medium tracking-wide">ANoGhost</span>
             </div>
           </div>
-          <div className="hidden md:flex items-center space-x-8">
-            <a href="#" className="text-white text-sm hover:text-[#FF4D00] transition-colors tracking-wide">
-              Features
-            </a>
-            <a href="#" className="text-gray-400 text-sm hover:text-white transition-colors tracking-wide">
-              Privacy
-            </a>
-            <a href="#" className="text-gray-400 text-sm hover:text-white transition-colors tracking-wide">
-              Security
-            </a>
-            <a href="#" className="text-gray-400 text-sm hover:text-white transition-colors tracking-wide">
-              Community
-            </a>
-          </div>
-          <div className="flex items-center space-x-4">
-            <div className="border border-[#333333] rounded-full px-4 py-2 text-sm">{formattedDate}</div>
-            {connected ? (
+
+          {connected ? (
+            <div className="relative" ref={dropdownRef}>
               <button
-                onClick={handleCreateChatRoom}
-                className="border border-[#333333] rounded-full px-4 py-2 text-sm flex items-center hover:border-[#FF4D00] hover:text-[#FF4D00] transition-colors"
+                onClick={() => setDropdownOpen(!dropdownOpen)}
+                className="border border-[#333333] rounded-full px-4 py-2 flex items-center hover:border-[#FF4D00] transition-colors"
               >
-                Enter App <ChevronRight size={16} className="ml-1" />
+                <div className="flex items-center">
+                  <span className="text-xs text-gray-400 mr-2">Ghost ID:</span>
+                  <GhostIdDisplay />
+                </div>
+                <ChevronDown size={14} className={`ml-2 transition-transform ${dropdownOpen ? "rotate-180" : ""}`} />
               </button>
-            ) : (
-              <WalletMultiButton className="!border !border-[#333333] !rounded-full !px-4 !py-2 !text-sm !flex !items-center !bg-transparent !hover:border-[#FF4D00]" />
-            )}
-          </div>
+
+              {dropdownOpen && (
+                <div className="absolute right-0 mt-2 w-48 bg-[#111111] border border-[#333333] rounded-xl shadow-lg overflow-hidden z-50">
+                  <div className="py-1">
+                    <button
+                      onClick={handleRefreshGhostId}
+                      className="flex items-center w-full px-4 py-3 text-sm text-white hover:bg-[#1A1A1A] transition-colors"
+                    >
+                      <RefreshCw size={14} className="mr-2 text-[#FF4D00]" />
+                      Refresh Ghost ID
+                    </button>
+                    <button
+                      onClick={handleCopyGhostId}
+                      className="flex items-center w-full px-4 py-3 text-sm text-white hover:bg-[#1A1A1A] transition-colors"
+                    >
+                      <Copy size={14} className="mr-2 text-[#FF4D00]" />
+                      Copy Ghost ID
+                    </button>
+                    <div className="border-t border-[#333333] my-1"></div>
+                    <button
+                      onClick={handleDisconnectWallet}
+                      className="flex items-center w-full px-4 py-3 text-sm text-white hover:bg-[#1A1A1A] transition-colors"
+                    >
+                      <LogOut size={14} className="mr-2 text-[#FF4D00]" />
+                      Disconnect Wallet
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <CustomWalletSelector />
+          )}
         </div>
       </header>
 
@@ -165,10 +248,33 @@ const HomePage = () => {
             Messages can self-destruct, with zero tracking of personal data.
           </p>
 
-          <div className="mt-10 flex justify-center">
-            <button className="w-12 h-12 rounded-full border border-[#333333] flex items-center justify-center hover:border-[#FF4D00] hover:text-[#FF4D00] transition-colors">
-              <ArrowUpRight size={20} />
-            </button>
+          <div className="mt-10 flex justify-center space-x-4">
+            {connected ? (
+              <>
+                <button
+                  onClick={handleCreateChatRoom}
+                  className="h-12 px-6 rounded-full bg-[#FF4D00] text-black flex items-center justify-center hover:opacity-90 transition-colors font-medium"
+                >
+                  Create Room <ArrowUpRight size={18} className="ml-2" />
+                </button>
+                <button
+                  onClick={handleJoinChat}
+                  className="h-12 px-6 rounded-full border border-[#333333] flex items-center justify-center hover:border-[#FF4D00] hover:text-[#FF4D00] transition-colors font-medium"
+                >
+                  Join Room <ArrowUpRight size={18} className="ml-2" />
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => {
+                  const walletButton = document.querySelector(".custom-wallet-button") as HTMLButtonElement | null
+                  if (walletButton) walletButton.click()
+                }}
+                className="h-12 px-6 rounded-full bg-[#FF4D00] text-black flex items-center justify-center hover:opacity-90 transition-colors font-medium"
+              >
+                Connect Wallet <ArrowUpRight size={18} className="ml-2" />
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -255,38 +361,6 @@ const HomePage = () => {
             <p className="text-gray-400 text-sm leading-relaxed">
               Create exclusive spaces for NFT holders or token owners. Perfect for DAOs and exclusive communities.
             </p>
-          </div>
-        </div>
-      </div>
-
-      {/* CTA Section */}
-      <div className="fixed bottom-6 left-0 right-0 z-50">
-        <div className="max-w-xl mx-auto px-4">
-          <div className="bg-black/50 border border-[#333333] rounded-full p-2 flex items-center justify-between">
-            <div className="flex items-center space-x-4 pl-4">
-              <Ghost size={16} className="text-[#FF4D00]" />
-              <span className="text-sm">Anonymous Web3 messaging</span>
-            </div>
-            <div className="flex space-x-2">
-              {connected ? (
-                <>
-                  <button
-                    onClick={handleCreateChatRoom}
-                    className="bg-[#FF4D00] text-black rounded-full px-6 py-2 text-sm font-medium hover:opacity-90 transition-colors"
-                  >
-                    Create Room
-                  </button>
-                  <button
-                    onClick={handleJoinChat}
-                    className="bg-transparent rounded-full px-6 py-2 text-sm font-medium transition-colors border border-[#333333] hover:border-[#FF4D00] hover:text-[#FF4D00]"
-                  >
-                    Join Room
-                  </button>
-                </>
-              ) : (
-                <WalletMultiButton className="!bg-[#FF4D00] !text-black !rounded-full !px-6 !py-2 !text-sm !font-medium !hover:opacity-90 !transition-colors" />
-              )}
-            </div>
           </div>
         </div>
       </div>
