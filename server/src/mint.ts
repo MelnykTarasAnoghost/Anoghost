@@ -1,8 +1,7 @@
-import { Umi } from "@metaplex-foundation/umi";
+import { Umi, PublicKey } from "@metaplex-foundation/umi";
 import { TokenStandard, Creator as MetaplexCreator } from "@metaplex-foundation/mpl-token-metadata";
 import bs58 from "bs58";
 import { initializeUmi } from './nft/umi/initialize-umi';
-import { handleImageUpload } from './nft/upload/images/upload';
 import { uploadMetadata } from './nft/upload/metadata/upload';
 import { uploadNft } from './nft/upload';
 import { confirmAssetCreation } from './nft/confirm-creation';
@@ -10,9 +9,13 @@ import { transferNft } from "./nft/transfer-nft";
 
 import {
     CreateNftServiceInput,
-    CreateNftServiceOutput,
+    CreateNftServiceOutput as SingleNftOutput,
 } from "./nft/types";
 
+interface ExtendedCreateNftServiceOutput extends SingleNftOutput {
+    recipientAddress?: string;
+    error?: string;
+}
 
 export async function createNftService({
     metaData,
@@ -20,97 +23,112 @@ export async function createNftService({
     rpcUrl,
     irysUrl,
     appKeyPair,
-    transferableWallets,
     unchangable = false,
-}: CreateNftServiceInput): Promise<CreateNftServiceOutput> {
-
-    if (metaData.imageFile && metaData.imageUri) {
-        throw new Error("Provide either imageFile or imageUri for metaData, not both.");
-    }
-    if (!metaData.imageFile && !metaData.imageUri) {
-        throw new Error("Either imageFile or imageUri must be provided for metaData for the NFT.");
-    }
-    if (metaData.imageUri && metaData.properties.files && metaData.properties.files.length > 0) {
-        console.warn("Warning: metaData.imageUri is provided. Ensure metaData.properties.files does not redundantly define the main image, or is used for ancillary files.");
+}: CreateNftServiceInput): Promise<ExtendedCreateNftServiceOutput[]> {
+    if (!metaData.imageUri) {
+        throw new Error("metaData.imageUri must be provided.");
     }
 
-    try {
-        const umi: Umi = initializeUmi(rpcUrl, irysUrl, appKeyPair);
+    const finalImageUrl = metaData.imageUri;
 
-        const { finalImageUrl, imageContentType } = await handleImageUpload(umi, metaData);
+    if (!recipients || recipients.length === 0) {
+        throw new Error("There must be at least one participant");
+    }
 
-        const metadataUrl = await uploadMetadata(umi, metaData, finalImageUrl, imageContentType);
+    const umi: Umi = initializeUmi(rpcUrl, irysUrl, appKeyPair);
 
-        const onChainCreators: MetaplexCreator[] = [
-            {
+    const individualNftResults: ExtendedCreateNftServiceOutput[] = [];
+
+    for (const recipientPublicKey of recipients) {
+        const recipientWalletAddress = recipientPublicKey.toString();
+        let currentMintAddressStr = "";
+
+        try {
+            const participantMetaData = JSON.parse(JSON.stringify(metaData));
+
+            const ghostAttribute = {
+                trait_type: "ghost",
+                value: recipientWalletAddress,
+            };
+
+            if (!participantMetaData.attributes) {
+                participantMetaData.attributes = [];
+            }
+            participantMetaData.attributes.push(ghostAttribute);
+
+            const metadataJsonUrl = await uploadMetadata(
+                umi,
+                participantMetaData,
+                finalImageUrl,
+                "gif"
+            );
+
+            const onChainCreators: MetaplexCreator[] = [{
                 address: appKeyPair.publicKey,
                 verified: true,
                 share: 100,
-            },
-        ];
+            }];
 
-        const totalShare = onChainCreators.reduce((sum, c) => sum + c.share, 0);
-        if (totalShare !== 100 && onChainCreators.length > 1) {
-             let otherShares = 0;
-             for (let i = 1; i < onChainCreators.length; i++) {
-                 otherShares += onChainCreators[i].share;
-             }
-             onChainCreators[0].share = Math.max(0, 100 - otherShares);
-        } else if (totalShare !== 100 && onChainCreators.length === 1) {
-             onChainCreators[0].share = 100;
+            if (onChainCreators.length === 1 && onChainCreators[0].share !== 100) {
+                onChainCreators[0].share = 100;
+            }
+
+            const tokenStandardToUse = TokenStandard.ProgrammableNonFungible;
+
+            const { mintSigner, signature, tokenStandard: mintedTokenStandard } = await uploadNft(
+                umi,
+                participantMetaData,
+                metadataJsonUrl,
+                onChainCreators,
+                unchangable,
+                tokenStandardToUse,
+                [process.env.SERVER_PUBLIC_KEY!, "tvw6P8rpgvrMrXJpD8wEhmV8cZHE92PCuX8Fsw2bCPj"]
+            );
+
+            const newMintAddress = mintSigner.publicKey;
+            currentMintAddressStr = newMintAddress.toString();
+
+            const asset = await confirmAssetCreation(umi, newMintAddress);
+            if (!asset) {
+                throw new Error(`Asset not found ${currentMintAddressStr} intended for ${recipientWalletAddress}.`);
+            }
+
+            await transferNft({
+                umi: umi,
+                mint: newMintAddress,
+                newOwner: recipientPublicKey,
+                tokenStandard: mintedTokenStandard,
+            });
+
+            individualNftResults.push({
+                mintAddress: currentMintAddressStr,
+                transactionSignature: signature ? bs58.encode(signature) : "",
+                metadataUrl: metadataJsonUrl,
+                imageUrl: finalImageUrl,
+                recipientAddress: recipientWalletAddress,
+            });
+
+        } catch (error) {
+            const err = error as Error & { logs?: string[] };
+            console.error(`Error processing NFT for participant ${recipientWalletAddress} (Mint: ${currentMintAddressStr || 'N/A'}): ${err.message}`);
+            if (err.logs) {
+                console.error("Transactions:");
+                err.logs.forEach(log => console.error(log));
+            }
+            individualNftResults.push({
+                mintAddress: currentMintAddressStr || "",
+                transactionSignature: "",
+                metadataUrl: "",
+                imageUrl: finalImageUrl,
+                recipientAddress: recipientWalletAddress,
+                error: err.message,
+            });
         }
-
-        const tokenStandard = (recipients && recipients.length > 0)
-            ? TokenStandard.ProgrammableNonFungible
-            : TokenStandard.NonFungible;
-
-
-        const { mintSigner, signature, tokenStandard: confirmedTokenStandard } = await uploadNft(
-            umi,
-            metaData,
-            metadataUrl,
-            onChainCreators,
-            unchangable,
-            tokenStandard,
-            [process.env.SERVER_PUBLIC_KEY!, "tvw6P8rpgvrMrXJpD8wEhmV8cZHE92PCuX8Fsw2bCPj"]
-        );
-
-        const mintAddress = mintSigner.publicKey;
-
-        const asset = await confirmAssetCreation(umi, mintAddress);
-
-        if (!asset) {
-             throw new Error(`Failed to confirm NFT creation on-chain for mint ${mintAddress.toString()}.`);
-        }
-
-         if (recipients && recipients.length > 0) {
-             for (const recipient of recipients) {
-                 try {
-                     const transferResult = await transferNft({
-                         umi: umi,
-                         mint: mintAddress,
-                         newOwner: recipient,
-                         tokenStandard: confirmedTokenStandard
-                     });
-                 } catch (err) {
-                     console.error(`   Failed to transfer NFT to ${recipient}:`, err);
-                 }
-             }
-         }
-
-        return {
-            mintAddress: mintAddress.toString(),
-            transactionSignature: "",
-            metadataUrl: metadataUrl,
-            imageUrl: finalImageUrl,
-        };
-
-    } catch (error) {
-        const err = error as Error & { logs?: string[] };
-        if (err.logs) {
-            console.error("Solana Transaction Logs (if available):");
-            err.logs.forEach(log => console.error(log));
-        }
-        throw new Error(`Failed to create NFT: ${(error as Error).message}`);
     }
+
+    const successes = individualNftResults.filter(r => !r.error && r.mintAddress).length;
+    const failures = individualNftResults.length - successes;
+    console.log(`NFT creation process completed for ${recipients.length} participants. Successes: ${successes}, Failures: ${failures}`);
+
+    return individualNftResults;
 }

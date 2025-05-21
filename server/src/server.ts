@@ -165,17 +165,11 @@ httpServer.listen(PORT, () => {
   console.log(`   Security measures implemented.`)
 
   // Add Ghost ID system initialization log
-  const masterSecret = process.env.GHOST_ID_MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
+  const masterSecret = process.env.GHOST_ID_MASTER_SECRET!
   console.log(
-    `[GhostID] System initialized with master secret: ${masterSecret.substring(0, 3)}...${masterSecret.substring(masterSecret.length - 3)}`,
+    `[GhostID] System initialized}`,
   )
   console.log(`[GhostID] Rotation interval: ${300} seconds`)
-
-  if (!process.env.GHOST_ID_MASTER_SECRET) {
-    console.warn(
-      `[GhostID] ⚠️ WARNING: Using default master secret. Set GHOST_ID_MASTER_SECRET environment variable for production.`,
-    )
-  }
 })
 
 // Graceful shutdown
