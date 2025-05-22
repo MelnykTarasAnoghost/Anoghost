@@ -1,0 +1,9 @@
+curl -X POST http://localhost:3001/api/mint \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Awesome Room",
+    "roomId": "AAAAAAAAA",
+    "ghosts": [
+      "yG2oBnRkBQNPFykWJR32AYDaHBYC09uhrFDep9gTUu6bg6WLZrpd0vypyNRO3O5eNmLGrQBmmejjZtRTJMk1L2PNGDtSZPs="
+    ]
+  }'

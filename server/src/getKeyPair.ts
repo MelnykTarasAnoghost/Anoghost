@@ -11,7 +11,7 @@ import {
     const publicKeyEnvVar = process.env.SERVER_PUBLIC_KEY!;
   
     const expectedPublicKey = publicKeyEnvVar as UmiPublicKey;
-    const umiTemp = createUmi(process.env.RPC_URL || "https://api.devnet.solana.com");
+    const umiTemp = createUmi(process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com");
     let derivedKeypair: UmiKeypair;
   
     try {

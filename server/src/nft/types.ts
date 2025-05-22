@@ -41,12 +41,13 @@ export interface MetaDataInput {
 
 export interface CreateNftServiceInput {
     metaData: MetaDataInput;
-    recipients?: string[];
+    ghosts: string[];
     rpcUrl: string;
     irysUrl: string;
     appKeyPair: Keypair;
     transferableWallets?: string[];
     unchangable?: boolean;
+    roomId: string
 }
 
 export interface CreateNftServiceOutput {

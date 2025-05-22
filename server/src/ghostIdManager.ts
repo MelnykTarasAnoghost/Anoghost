@@ -1,140 +1,98 @@
 import crypto from "crypto"
 
-// Time window in seconds (5 minutes)
-const INTERVAL_SEC = 300
+const INTERVAL_SEC = 300 // 5 minutes
 
-// Map to store active Ghost IDs by wallet address
 const activeGhostIds = new Map<string, string>()
-
-// Map to store the last generation time for each wallet
 const lastGenerationTime = new Map<string, number>()
 
-/**
- * Derives an ephemeral key from the master secret and current time window
- * @param masterSecret The master secret
- * @param offset Time window offset (0 for current, -1 for previous)
- * @returns Buffer containing the derived key
- */
 function deriveEphemeralKey(masterSecret: string, offset = 0): Buffer {
-  const now = Math.floor(Date.now() / 1000)
-  const window = Math.floor(now / INTERVAL_SEC) + offset
-  return crypto.createHmac("sha256", masterSecret).update(window.toString()).digest() // 32 bytes
+  const now = Math.floor(Date.now() / 1000);
+  const window = Math.floor(now / INTERVAL_SEC) + offset;
+  return crypto.createHmac("sha256", masterSecret).update(window.toString()).digest();
 }
 
-/**
- * Encrypts a wallet address into a Ghost ID
- * @param walletAddress The wallet address to encrypt
- * @param key The encryption key
- * @returns Base64 encoded Ghost ID (IV + ciphertext)
- */
-function encryptWalletToGhostId(walletAddress: string, key: Buffer): string {
-  // Generate a random IV (96 bits as recommended for GCM)
-  const iv = crypto.randomBytes(12)
+function decryptGhostId(ghostId: string, key: Buffer): string {
+  try {
+    const combined = Buffer.from(ghostId, "base64");
+    const iv = combined.subarray(0, 12);
+    const authTag = combined.subarray(combined.length - 16);
+    const ciphertext = combined.subarray(12, combined.length - 16);
 
-  // Create cipher
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(authTag);
+    const decrypted = Buffer.concat([
+      decipher.update(ciphertext),
+      decipher.final(),
+    ]);
+    return decrypted.toString("utf8");
+  } catch (e) {
+    throw new Error("Failed to decrypt Ghost ID with the provided key");
+  }
+}
+
+function encryptWalletToGhostId(walletAddress: string, key: Buffer): string {
+  const iv = crypto.randomBytes(12)
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv)
 
-  // Encrypt the wallet address
-  const encrypted = Buffer.concat([cipher.update(walletAddress, "utf8"), cipher.final()])
-  const authTag = cipher.getAuthTag()
+  const encrypted = Buffer.concat([
+    cipher.update(walletAddress, "utf8"),
+    cipher.final(),
+  ])
 
-  // Combine IV + ciphertext + authTag for storage/transmission
+  const authTag = cipher.getAuthTag()
   const combined = Buffer.concat([iv, encrypted, authTag])
 
-  // Convert to Base64
   return combined.toString("base64")
 }
 
-/**
- * Decrypts a Ghost ID to retrieve the wallet address
- * @param ghostId Base64 encoded Ghost ID
- * @param key The decryption key
- * @returns The original wallet address
- */
-function decryptGhostId(ghostId: string, key: Buffer): string {
-  try {
-    const combined = Buffer.from(ghostId, "base64")
+export function tryDecryptWithRotation(
+  ghostId: string,
+  masterSecret: string
+): string {
+  const numberOfWindowsToScan = 12;
 
-    // Extract IV (first 12 bytes)
-    const iv = combined.subarray(0, 12)
-
-    // Extract auth tag (last 16 bytes)
-    const authTag = combined.subarray(combined.length - 16)
-
-    // Extract ciphertext (everything in between)
-    const ciphertext = combined.subarray(12, combined.length - 16)
-
-    // Create decipher
-    const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv)
-    decipher.setAuthTag(authTag)
-
-    // Decrypt
-    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
-    return decrypted.toString("utf8")
-  } catch (error) {
-    throw new Error("Failed to decrypt Ghost ID")
-  }
-}
-
-// Add logging to tryDecryptWithRotation function
-export function tryDecryptWithRotation(ghostId: string, masterSecret: string): string {
-  for (const offset of [0, -1]) {
+  for (let i = 0; i < numberOfWindowsToScan; i++) {
+    const offset = -i;
     try {
-      const key = deriveEphemeralKey(masterSecret, offset)
-      const result = decryptGhostId(ghostId, key)
-      return result
-    } catch {
-      continue // try next window
+      const key = deriveEphemeralKey(masterSecret, offset);
+      return decryptGhostId(ghostId, key);
+    } catch (error) {
     }
   }
-  throw new Error("Ghost doesn't exist")
+  throw new Error("Ghost doesn't exist (or not decryptable within the scanned window range)");
 }
 
-// Add logging to getGhostId function
 export function getGhostId(walletAddress: string, masterSecret: string, forceRefresh = false): string {
   const now = Date.now()
   const lastGen = lastGenerationTime.get(walletAddress) || 0
-  const timeElapsed = now - lastGen
 
-  // Check if we need to generate a new Ghost ID
-  // Generate if:
-  // 1. We don't have one for this wallet
-  // 2. Force refresh is requested
-  // 3. It's been more than 5 minutes since the last generation
-  if (!activeGhostIds.has(walletAddress) || forceRefresh || timeElapsed > INTERVAL_SEC * 1000) {
-    // Generate a new Ghost ID
+  const shouldRefresh =
+    forceRefresh ||
+    !activeGhostIds.has(walletAddress) ||
+    now - lastGen > INTERVAL_SEC * 1000
+
+  if (shouldRefresh) {
     const key = deriveEphemeralKey(masterSecret)
     const ghostId = encryptWalletToGhostId(walletAddress, key)
 
-    // Store it
     activeGhostIds.set(walletAddress, ghostId)
     lastGenerationTime.set(walletAddress, now)
 
     return ghostId
   }
 
-  // Return the existing Ghost ID
-  const existingGhostId = activeGhostIds.get(walletAddress)!
-  return existingGhostId
+  return activeGhostIds.get(walletAddress)!
 }
 
-/**
- * Formats a Ghost ID for display (truncates and adds separators)
- * @param ghostId The full Ghost ID
- * @returns Formatted Ghost ID for display
- */
 export function formatGhostId(ghostId: string): string {
   if (!ghostId || ghostId.length < 12) return ghostId
-
-  // Take first 12 chars and format with separators
-  const prefix = ghostId.substring(0, 12)
-  return `${prefix.substring(0, 4)}-${prefix.substring(4, 8)}-${prefix.substring(8, 12)}`
+  const prefix = ghostId.slice(0, 12)
+  return `${prefix.slice(0, 4)}-${prefix.slice(4, 8)}-${prefix.slice(8, 12)}`
 }
 
-// Add logging to validateGhostId function
 export function validateGhostId(
   ghostId: string,
-  masterSecret: string,
+  masterSecret: string
 ): {
   isValid: boolean
   walletAddress?: string
@@ -142,10 +100,7 @@ export function validateGhostId(
 } {
   try {
     const walletAddress = tryDecryptWithRotation(ghostId, masterSecret)
-    return {
-      isValid: true,
-      walletAddress,
-    }
+    return { isValid: true, walletAddress }
   } catch (error) {
     return {
       isValid: false,
@@ -154,26 +109,97 @@ export function validateGhostId(
   }
 }
 
-// Add logging to scheduleGhostIdRotation function
 export function scheduleGhostIdRotation(masterSecret: string): NodeJS.Timeout {
   return setInterval(() => {
     const now = Math.floor(Date.now() / 1000)
-    const currentWindow = Math.floor(now / INTERVAL_SEC)
-    const secondsUntilNextWindow = (currentWindow + 1) * INTERVAL_SEC - now
+    const secondsIntoCurrentWindow = now % INTERVAL_SEC
 
-    // If we're close to the window boundary (within 10 seconds), rotate all Ghost IDs
-    if (secondsUntilNextWindow <= 10) {
-      // Get all wallet addresses
+    // Rotate close to window boundary
+    if (secondsIntoCurrentWindow >= INTERVAL_SEC - 10) {
+      const key = deriveEphemeralKey(masterSecret)
       const walletAddresses = Array.from(activeGhostIds.keys())
 
-      // Generate new Ghost IDs for all active wallets
       for (const walletAddress of walletAddresses) {
-        const key = deriveEphemeralKey(masterSecret)
         const ghostId = encryptWalletToGhostId(walletAddress, key)
-
         activeGhostIds.set(walletAddress, ghostId)
         lastGenerationTime.set(walletAddress, Date.now())
       }
     }
-  }, 5000) // Check every 5 seconds
+  }, 5000)
+}
+
+const HKDF_SALT_LENGTH = 16;
+const AES_IV_LENGTH = 12;
+const AES_KEY_LENGTH = 32;
+const AUTH_TAG_LENGTH = 16;
+const HKDF_INFO_STRING = 'AnoGhost-TimelessGhostId-KeyDerivation';
+const HKDF_DIGEST_ALGORITHM = 'sha256';
+
+export function generateTimelessGhostId(walletAddress: string, masterSecret: string): string {
+    const hkdfSalt = crypto.randomBytes(HKDF_SALT_LENGTH);
+    const masterSecretBuffer = Buffer.from(masterSecret, 'utf-8');
+    const derivedKeyOutput = crypto.hkdfSync(
+        HKDF_DIGEST_ALGORITHM,
+        masterSecretBuffer,
+        hkdfSalt,
+        Buffer.from(HKDF_INFO_STRING, 'utf-8'),
+        AES_KEY_LENGTH
+    );
+    // Ensure the derived key is treated as a Buffer for createCipheriv
+    const derivedKeyAsBuffer = Buffer.from(derivedKeyOutput);
+
+    const iv = crypto.randomBytes(AES_IV_LENGTH);
+    const cipher = crypto.createCipheriv('aes-256-gcm', derivedKeyAsBuffer, iv);
+    const encryptedWalletAddress = Buffer.concat([
+        cipher.update(walletAddress, 'utf8'),
+        cipher.final(),
+    ]);
+    const authTag = cipher.getAuthTag();
+
+    const combined = Buffer.concat([hkdfSalt, iv, encryptedWalletAddress, authTag]);
+    return combined.toString('base64');
+}
+
+export function decryptTimelessGhostId(timelessGhostId: string, masterSecret: string): string {
+    const combined = Buffer.from(timelessGhostId, 'base64');
+
+    let offset = 0;
+
+    const hkdfSalt = combined.subarray(offset, offset + HKDF_SALT_LENGTH);
+    offset += HKDF_SALT_LENGTH;
+
+    const iv = combined.subarray(offset, offset + AES_IV_LENGTH);
+    offset += AES_IV_LENGTH;
+
+    const authTag = combined.subarray(combined.length - AUTH_TAG_LENGTH);
+    const encryptedWalletAddress = combined.subarray(offset, combined.length - AUTH_TAG_LENGTH);
+
+    if (hkdfSalt.length !== HKDF_SALT_LENGTH || 
+        iv.length !== AES_IV_LENGTH || 
+        authTag.length !== AUTH_TAG_LENGTH ||
+        encryptedWalletAddress.length < 0) {
+        throw new Error('Invalid timelessGhostId structure or length.');
+    }
+
+    const masterSecretBuffer = Buffer.from(masterSecret, 'utf-8');
+    const derivedKeyOutput = crypto.hkdfSync(
+        HKDF_DIGEST_ALGORITHM,
+        masterSecretBuffer,
+        hkdfSalt,
+        Buffer.from(HKDF_INFO_STRING, 'utf-8'),
+        AES_KEY_LENGTH
+    );
+    const derivedKeyAsBuffer = Buffer.from(derivedKeyOutput);
+
+    try {
+        const decipher = crypto.createDecipheriv('aes-256-gcm', derivedKeyAsBuffer, iv);
+        decipher.setAuthTag(authTag);
+        const decryptedWalletAddress = Buffer.concat([
+            decipher.update(encryptedWalletAddress),
+            decipher.final(),
+        ]);
+        return decryptedWalletAddress.toString('utf8');
+    } catch (error) {
+        throw new Error('Failed to decrypt timelessGhostId. Check masterSecret or ghostId integrity.');
+    }
 }

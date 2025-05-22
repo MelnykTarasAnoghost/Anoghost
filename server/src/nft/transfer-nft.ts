@@ -21,8 +21,8 @@ export async function transferNft({umi, mint, newOwner, tokenStandard}: {umi: Um
       .sendAndConfirm(umi)
 
     return tx
-  } catch (error) {
-    console.error('Failed to transfer NFT:', error)
+  } catch (error: any) {
+    console.error('Failed to transfer NFT:', error.message)
     throw error
   }
 }

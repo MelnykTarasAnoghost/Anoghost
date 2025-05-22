@@ -18,24 +18,17 @@ import {
   isRoomCreator,
 } from "./helpers"
 
-// Import the mock NFT service at the top of the file
-// - import { generateMockNft, getUserMockNfts } from "./mockNftService"
-
 import { getGhostId, validateGhostId } from "./ghostIdManager"
 
-// Map to store wallet address by socket ID
 const socketToWalletMap = new Map<string, string>()
 
 export function setupSocketHandlers(io: SocketIOServer) {
   io.on("connection", (socket: Socket) => {
     console.log(`New client connected: ${socket.id}`)
-
-    // Register user with public key and nickname
     socket.on("registerUser", (data: { publicKey: string; nickname: string }) => {
       try {
         const { publicKey, nickname } = data
 
-        // Validate inputs
         if (!publicKey || typeof publicKey !== "string" || publicKey.length < 10) {
           socket.emit("error", { message: "Invalid public key format" })
           return
@@ -46,8 +39,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
           socket.emit("error", { message: "Nickname must be 3-20 alphanumeric characters" })
           return
         }
-
-        // Create user session
         userSessions.set(socket.id, {
           socketId: socket.id,
           publicKey,
@@ -64,7 +55,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
         )
 
         // Generate Ghost ID for this user
-        const masterSecret = process.env.GHOST_ID_MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
+        const masterSecret = process.env.MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
         console.log(
           `[GhostID] Using master secret: ${masterSecret.substring(0, 3)}...${masterSecret.substring(masterSecret.length - 3)}`,
         )
@@ -97,7 +88,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
         )
 
         // Generate or retrieve Ghost ID
-        const masterSecret = process.env.GHOST_ID_MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
+        const masterSecret = process.env.MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
         const ghostId = getGhostId(publicKey, masterSecret)
 
         socket.emit("ghostIdUpdated", { ghostId })
@@ -123,7 +114,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
         )
 
         // Force generate a new Ghost ID
-        const masterSecret = process.env.GHOST_ID_MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
+        const masterSecret = process.env.MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
         const ghostId = getGhostId(publicKey, masterSecret, true)
 
         socket.emit("ghostIdUpdated", { ghostId })
@@ -246,7 +237,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
         // Verify Ghost ID if provided
         let hasValidGhostId = false
         if (ghostId && !hasValidToken) {
-          const masterSecret = process.env.GHOST_ID_MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
+          const masterSecret = process.env.MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
           const result = validateGhostId(ghostId, masterSecret)
 
           if (result.isValid && result.walletAddress) {
@@ -990,7 +981,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
         console.log(`[GhostID] Validation requested for Ghost ID: ${ghostId.substring(0, 8)}...`)
 
         // Attempt to decrypt and validate the Ghost ID
-        const masterSecret = process.env.GHOST_ID_MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
+        const masterSecret = process.env.MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
         const result = validateGhostId(ghostId, masterSecret)
 
         if (result.isValid && result.walletAddress) {
