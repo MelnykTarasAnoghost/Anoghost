@@ -198,7 +198,7 @@ const ChatArea: React.FC<ChatAreaProps> = ({
         {
           id: `join-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
           sender: "system",
-          text: `${data.nickname} joined the room`,
+          text: `${data.participants[0].nickname} joined the room`,
           timestamp: Date.now(),
         },
       ])
@@ -596,9 +596,9 @@ const ChatArea: React.FC<ChatAreaProps> = ({
       {/* Message input area */}
       <div className="p-4 bg-black border-t border-[#1a1a1a]">
         <form onSubmit={handleSendMessage} className="flex flex-col gap-2">
-          <div className="flex items-end gap-2">
+          <div className="flex items-center justify-center gap-2">
             <div className="flex-1 relative">
-              <div className="absolute left-3 bottom-3 text-gray-400">
+              <div className="absolute left-3 bottom-5 text-gray-400">
                 <MessageSquare size={18} />
               </div>
               <textarea
@@ -616,16 +616,16 @@ const ChatArea: React.FC<ChatAreaProps> = ({
                   }
                 }}
               />
-              <div className="absolute right-3 bottom-3 flex items-center space-x-2 text-gray-400">
+              <div className="absolute right-3 bottom-5 flex items-center space-x-2 text-gray-400">
                 <ExpirationSelector onSelect={setMessageExpiration} currentValue={messageExpiration} />
               </div>
             </div>
             <button
               type="submit"
-              className="bg-[#FF4D00] text-black font-medium p-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-12 w-12"
+              className="bg-[#FF4D00] text-black font-medium p-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center h-12 w-12 mb-1"
               disabled={!newMessage.trim() || isUploading || isAloneInRoom}
             >
-              <Send size={18} />
+              <Send size={16} />
             </button>
           </div>
         </form>

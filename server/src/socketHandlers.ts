@@ -22,6 +22,7 @@ import { getGhostId, validateGhostId } from "./ghostIdManager"
 
 const socketToWalletMap = new Map<string, string>()
 
+
 export function setupSocketHandlers(io: SocketIOServer) {
   io.on("connection", (socket: Socket) => {
     console.log(`New client connected: ${socket.id}`)
@@ -301,107 +302,94 @@ export function setupSocketHandlers(io: SocketIOServer) {
     // Approve a join request (room creator only)
     socket.on("approveJoinRequest", (data: { roomId: string; participantId: string }) => {
       try {
-        const { roomId, participantId } = data
+        const { roomId, participantId } = data;
 
-        const userSession = userSessions.get(socket.id)
+        const userSession = userSessions.get(socket.id);
         if (!userSession) {
-          socket.emit("error", { message: "You must be registered" })
-          return
+          socket.emit("error", { message: "You must be registered" });
+          return;
         }
 
-        const room = chatRooms.get(roomId)
+        const room = chatRooms.get(roomId);
         if (!room) {
-          socket.emit("error", { message: "Room not found" })
-          return
+          socket.emit("error", { message: "Room not found" });
+          return;
         }
 
-        // Check if user is the room creator
         if (!isRoomCreator(room, socket.id)) {
-          socket.emit("error", { message: "Only the room creator can approve join requests" })
-          return
+          socket.emit("error", { message: "Only the room creator can approve join requests" });
+          return;
         }
 
-        // Check if the participant is in pending list
-        const pendingParticipant = room.pendingParticipants.get(participantId)
+        const pendingParticipant = room.pendingParticipants.get(participantId);
         if (!pendingParticipant) {
-          socket.emit("error", { message: "Participant not found in pending list" })
-          return
+          socket.emit("error", { message: "Participant not found in pending list" });
+          return;
         }
 
-        // Get the participant's socket
-        const participantSocket = io.sockets.sockets.get(participantId)
+        const participantSocket = io.sockets.sockets.get(participantId);
         if (!participantSocket) {
-          // Participant disconnected, remove from pending
-          room.pendingParticipants.delete(participantId)
+          room.pendingParticipants.delete(participantId);
           socket.emit("pendingJoinRequest", {
             roomId: room.id,
             pendingParticipants: getPendingParticipantsList(room),
-          })
-          return
+          });
+          return;
         }
 
-        // Get the participant's session
-        const participantSession = userSessions.get(participantId)
+        const participantSession = userSessions.get(participantId);
         if (!participantSession) {
-          // Participant session not found, remove from pending
-          room.pendingParticipants.delete(participantId)
+          room.pendingParticipants.delete(participantId);
           socket.emit("pendingJoinRequest", {
             roomId: room.id,
             pendingParticipants: getPendingParticipantsList(room),
-          })
-          return
+          });
+          return;
         }
 
-        // Generate a token for the participant
-        const token = generateRoomToken(roomId, participantSession.publicKey)
-        room.accessTokens.add(token)
-        participantSession.roomTokens.push(token)
+        const token = generateRoomToken(roomId, participantSession.publicKey);
+        room.accessTokens.add(token);
+        participantSession.roomTokens.push(token);
 
-        // Remove from pending list
-        room.pendingParticipants.delete(participantId)
+        room.pendingParticipants.delete(participantId);
 
-        // Add to participants
         room.participants.set(participantId, {
           socketId: participantId,
           publicKey: participantSession.publicKey,
           nickname: participantSession.nickname,
           joinedAt: Date.now(),
-        })
+        });
 
-        // Update socket to room mapping
-        socketToRoomMap.set(participantId, roomId)
-
-        // Join the socket.io room
-        participantSocket.join(roomId)
+        socketToRoomMap.set(participantId, roomId);
+        participantSocket.join(roomId);
 
         console.log(
           `User ${participantSession.nickname} was approved to join room ${room.name} (ID: ${roomId}) by ${userSession.nickname}`,
-        )
+        );
 
-        // Notify the participant they've been approved
         participantSocket.emit("joinRequestApproved", {
           roomId: room.id,
           roomName: room.name,
           accessToken: token,
           participants: getParticipantsList(room),
-        })
+          isCreator: false,
+          pendingParticipants: [],
+        });
 
-        // Notify all participants about the new user
-        socket.to(roomId).emit("userJoinedRoom", {
-          nickname: participantSession.nickname,
+        io.to(roomId).emit("userJoinedRoom", {
+          roomId: room.id,
           participants: getParticipantsList(room),
-        })
+        });
 
-        // Update the room creator's pending list
         socket.emit("pendingJoinRequest", {
           roomId: room.id,
           pendingParticipants: getPendingParticipantsList(room),
-        })
+        });
       } catch (error) {
-        console.error("Error in approveJoinRequest:", error)
-        socket.emit("error", { message: "Failed to approve join request" })
+        console.error("Error in approveJoinRequest:", error);
+        socket.emit("error", { message: "Failed to approve join request" });
       }
-    })
+    });
 
     // Reject a join request (room creator only)
     socket.on("rejectJoinRequest", (data: { roomId: string; participantId: string }) => {

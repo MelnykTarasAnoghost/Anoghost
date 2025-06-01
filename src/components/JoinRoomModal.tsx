@@ -51,7 +51,7 @@ const JoinRoomModal: React.FC<JoinRoomModalProps> = ({ isOpen, onClose, onJoinSu
         if (joinMethod === "roomId" && roomIdInputRef.current) {
             setTimeout(() => roomIdInputRef.current?.focus(), 100);
         } else if (joinMethod === "nftAccess") {
-            setClientNfts([]); // Clear previous NFTs when tab is selected or modal opens
+            setClientNfts([]);
             setSelectedClientNft(null);
         }
     }
@@ -90,6 +90,7 @@ const JoinRoomModal: React.FC<JoinRoomModalProps> = ({ isOpen, onClose, onJoinSu
       const result = await requestJoinRoom(roomToJoin) 
       if (result.success) {
         if (result.status === "joined" && result.roomData) {
+          console.log(result.roomData)
           onJoinSuccess(result.roomData)
         } else if (result.status === "pending" && result.roomData) {
           onJoinPending({ roomId: result.roomData.roomId, roomName: result.roomData.roomName })

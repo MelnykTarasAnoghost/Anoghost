@@ -30,6 +30,7 @@ export async function createNftService({
     rpcUrl,
     irysUrl,
     appKeyPair,
+    roomId,
     unchangable = false,
 }: CreateNftServiceInput): Promise<ExtendedCreateNftServiceOutput[]> {
     if (!metaData.imageUri) {
@@ -93,16 +94,23 @@ export async function createNftService({
         try {
             const participantMetaData = JSON.parse(JSON.stringify(metaData));
             const newEncryptedGhostAttributeValue = generateTimelessGhostId(decryptedWalletAddress, masterSecret);
+            const newEncryptedRoomIdAttributeValue = generateTimelessGhostId(roomId, masterSecret);
 
             const ghostAttribute = {
                 trait_type: "ghost",
                 value: newEncryptedGhostAttributeValue, 
             };
 
+            const roomAttribute = {
+                trait_type: "room_id_encrypted",
+                value: newEncryptedRoomIdAttributeValue, 
+            };
+
             if (!participantMetaData.attributes) {
                 participantMetaData.attributes = [];
             }
             participantMetaData.attributes.push(ghostAttribute);
+            participantMetaData.attributes.push(roomAttribute);
 
             const metadataJsonUrl = await uploadMetadata(
                 umi,

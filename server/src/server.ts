@@ -123,16 +123,16 @@ app.post("/api/nft/scan", async (req: Request, res: Response) => {
   let umi = initializeUmi(rpcUrl, irysUrl, appKeyPair);
 
   try {
-    const status: NftAccessStatus = await scanNftForAccess(
+    const response: NftAccessStatus = await scanNftForAccess(
       nftIdentifier,
       currentUserWalletAddress,
       masterSecret,
       umi
     );
 
-    switch (status) {
+    switch (response.status) {
       case "success":
-        return res.status(200).json({ status: "success", message: "Access granted." });
+        return res.status(200).json({ status: "success", message: "Access granted.", roomId: response.roomId});
       case "illegal-owner":
         return res.status(403).json({ status: "illegal-owner", message: "Access denied: Wallet does not match NFT's intended owner." });
       case "invalid-room":

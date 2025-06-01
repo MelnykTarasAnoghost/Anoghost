@@ -5,7 +5,6 @@ import { useState, useEffect } from "react"
 import LeftSidebar from "./LeftSidebar"
 import ChatArea from "./ChatArea"
 import RightSidebar from "./RightSidebar"
-import { getSocket } from "../services/socket"
 
 interface RoomData {
   roomId: string
@@ -34,66 +33,26 @@ const ChatLayout: React.FC<ChatLayoutProps> = ({
   const [isMobileLeftSidebarOpen, setIsMobileLeftSidebarOpen] = useState(false)
   const [isMobileRightSidebarOpen, setIsMobileRightSidebarOpen] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
-  const [participants, setParticipants] = useState<Array<{ nickname: string; joinedAt: number }>>(
-    roomData.participants || [],
-  )
 
-  // Check for mobile view
   useEffect(() => {
     const checkMobileView = () => {
       setIsMobile(window.innerWidth < 768)
     }
-
     checkMobileView()
     window.addEventListener("resize", checkMobileView)
-
     return () => {
       window.removeEventListener("resize", checkMobileView)
     }
   }, [])
 
-  // Set up socket event listeners for user joining/leaving at the parent level
+  const participants = roomData.participants || [];
+
   useEffect(() => {
-    const socket = getSocket()
-    if (!socket) return
-
-    // Handle user joining the room
-    const handleUserJoined = (data: {
-      nickname: string
-      participants: Array<{ nickname: string; joinedAt: number }>
-    }) => {
-      // Update participants list immediately
-      setParticipants(data.participants)
-    }
-
-    // Handle user leaving the room
-    const handleUserLeft = (data: {
-      nickname: string
-      participants: Array<{ nickname: string; joinedAt: number }>
-    }) => {
-      // Update participants list immediately
-      setParticipants(data.participants)
-    }
-
-    socket.on("userJoinedRoom", handleUserJoined)
-    socket.on("userLeftRoom", handleUserLeft)
-
-    return () => {
-      socket.off("userJoinedRoom", handleUserJoined)
-      socket.off("userLeftRoom", handleUserLeft)
-    }
-  }, [])
-
-  // Initialize participants from roomData
-  useEffect(() => {
-    if (roomData && roomData.participants) {
-      setParticipants(roomData.participants)
-    }
-  }, [roomData])
+      console.log("ChatLayout re-rendered. Received roomData.participants count:", participants.length, "Data:", JSON.parse(JSON.stringify(participants)));
+    }, [participants]);
 
   return (
     <div className="flex h-screen w-screen bg-black overflow-hidden">
-      {/* Left Sidebar - hidden on mobile unless toggled */}
       <div
         className={`${
           isMobileLeftSidebarOpen
@@ -109,7 +68,6 @@ const ChatLayout: React.FC<ChatLayoutProps> = ({
         />
       </div>
 
-      {/* Main Chat Area */}
       <div className="flex-1 flex flex-col">
         <ChatArea
           roomData={{
@@ -123,7 +81,6 @@ const ChatLayout: React.FC<ChatLayoutProps> = ({
         />
       </div>
 
-      {/* Right Sidebar - hidden on mobile unless toggled */}
       <div
         className={`${
           isMobileRightSidebarOpen
@@ -141,7 +98,6 @@ const ChatLayout: React.FC<ChatLayoutProps> = ({
         />
       </div>
 
-      {/* Overlay for mobile when sidebar is open */}
       {(isMobileLeftSidebarOpen || isMobileRightSidebarOpen) && isMobile && (
         <div
           className="fixed inset-0 bg-black/70 z-40"

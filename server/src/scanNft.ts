@@ -14,7 +14,7 @@ interface NftMetadata {
     attributes: NftAttribute[];
 }
 
-export type NftAccessStatus = "success" | "illegal-owner" | "invalid-room" | "server-error" | "nft-not-found" | "nft-invalid-structure" | "metadata-fetch-error";
+export type NftAccessStatus = { status: "success" | "illegal-owner" | "invalid-room" | "server-error" | "nft-not-found" | "nft-invalid-structure" | "metadata-fetch-error", roomId?: string};
 
 async function fetchNftMetadata(nftIdentifier: string, umi: Umi): Promise<NftMetadata | null> {
     console.log(`Fetching REAL NFT metadata for mint: ${nftIdentifier}`);
@@ -68,11 +68,11 @@ export async function scanNftForAccess(
 
     if (!masterSecret) {
         console.error("Master secret is not provided for scanNftForAccess.");
-        return "server-error"; 
+        return {status: "server-error"}; 
     }
     if (!umi) {
         console.error("Umi instance is not provided for scanNftForAccess.");
-        return "server-error";
+        return {status: "server-error"};
     }
 
     let metadata: NftMetadata | null;
@@ -80,12 +80,12 @@ export async function scanNftForAccess(
         metadata = await fetchNftMetadata(nftIdentifier, umi);
     } catch (error: any) {
         console.error(`Unexpected error during metadata fetch for NFT ${nftIdentifier}: ${error.message}`);
-        return "metadata-fetch-error"; 
+        return {status: "metadata-fetch-error" }; 
     }
 
     if (!metadata) {
         console.warn(`NFT metadata not found or failed to fetch for identifier: ${nftIdentifier}`);
-        return "nft-not-found";
+        return {status: "nft-not-found" };
     }
 
     console.log(metadata)
@@ -93,7 +93,7 @@ export async function scanNftForAccess(
     const ghostAttribute = metadata.attributes.find(attr => attr.trait_type === "ghost");
     if (!ghostAttribute || !ghostAttribute.value) {
         console.warn(`'ghost' attribute not found or empty in NFT metadata for ${nftIdentifier}`);
-        return "nft-invalid-structure"; 
+        return {status: "nft-invalid-structure"}; 
     }
 
     let intendedRecipientWalletAddress: string;
@@ -101,18 +101,18 @@ export async function scanNftForAccess(
         intendedRecipientWalletAddress = decryptTimelessGhostId(ghostAttribute.value, masterSecret);
     } catch (error: any) {
         console.error(`Failed to decrypt ghostId for NFT ${nftIdentifier}: ${error.message}`);
-        return "nft-invalid-structure"; 
+        return {status: "nft-invalid-structure"}; 
     }
 
     if (intendedRecipientWalletAddress.toLowerCase() !== currentUserWalletAddress.toLowerCase()) {
         console.warn(`Wallet address mismatch for NFT ${nftIdentifier}. Expected: ${intendedRecipientWalletAddress}, Got: ${currentUserWalletAddress}`);
-        return "illegal-owner";
+        return {status: "illegal-owner" };
     }
 
     const roomIdAttribute = metadata.attributes.find(attr => attr.trait_type === "room_id_encrypted");
     if (!roomIdAttribute || !roomIdAttribute.value) {
         console.warn(`'room_id_encrypted' attribute not found or empty in NFT metadata for ${nftIdentifier}`);
-        return "invalid-room"; 
+        return {status: "invalid-room" }; 
     }
 
     let decryptedRoomId: string;
@@ -120,9 +120,9 @@ export async function scanNftForAccess(
         decryptedRoomId = decryptTimelessGhostId(roomIdAttribute.value, masterSecret);
     } catch (error: any) {
         console.error(`Failed to decrypt room ID for NFT ${nftIdentifier}: ${error.message}`);
-        return "invalid-room"; 
+        return {status: "invalid-room" }; 
     }
 
     console.log(`Access GRANTED for user ${currentUserWalletAddress.substring(0,10)}... to room ${decryptedRoomId} via NFT ${nftIdentifier.substring(0,10)}...`);
-    return "success";
+    return {status: "success", roomId: decryptedRoomId };
 }
