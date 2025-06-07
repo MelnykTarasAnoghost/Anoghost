@@ -1,5 +1,5 @@
 import type { Server as SocketIOServer, Socket } from "socket.io"
-import { randomUUID } from "crypto"
+import { JsonWebKey, randomUUID } from "crypto"
 import {
   userSessions,
   chatRooms,
@@ -629,7 +629,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
     // Add these new socket event handlers for key exchange
 
     // Handle public key sharing
-    socket.on("sharePublicKey", (data: { roomId: string; publicKeyJwk: JsonWebKey }) => {
+    socket.on("sharePublicKey", (data: { roomId: string; publicKeyJwk: string }) => {
       try {
         const { roomId, publicKeyJwk } = data
 

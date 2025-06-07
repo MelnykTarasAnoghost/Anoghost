@@ -18,7 +18,7 @@ import dotenv from "dotenv"
 
 dotenv.config()
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3000;
 const app: Express = express();
 
 app.use(helmet());
@@ -153,12 +153,16 @@ app.post("/api/nft/scan", async (req: Request, res: Response) => {
   }
 });
 
-httpServer.listen(PORT, () => {
+httpServer.listen({
+  port: 3000,
+  host: '0.0.0.0'
+} , () => {
   console.log(`🚀 Backend server is running on http://localhost:${PORT}`);
   console.log(`   WebSocket connections enabled.`);
   console.log(`   Security measures implemented.`);
   console.log(`[GhostID] System initialized`);
   console.log(`[GhostID] Rotation interval: ${300} seconds`);
+  console.log(process.env.IRYS_URL)
 });
 
 const signals = ["SIGTERM", "SIGINT"] as const;
