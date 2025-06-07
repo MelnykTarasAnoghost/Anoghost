@@ -154,7 +154,7 @@ app.post("/api/nft/scan", async (req: Request, res: Response) => {
 });
 
 httpServer.listen({
-  port: 3000,
+  port: PORT,
   host: '0.0.0.0'
 } , () => {
   console.log(`🚀 Backend server is running on http://localhost:${PORT}`);
