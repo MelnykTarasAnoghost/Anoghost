@@ -16,24 +16,22 @@ export default defineConfig({
         process: true,
       },
       protocolImports: true, // For 'node:' protocol imports
-      // Check plugin docs if 'stream/promises' needs explicit mention here
     }),
   ],
   resolve: {
     alias: {
       'stream': "stream"
-      // Ensure 'stream: 'stream-browserify'' is NOT present here
-      // Add other aliases if needed, but not for 'stream' if using nodePolyfills for it
     },
   },
   optimizeDeps: {
     esbuildOptions: {
       define: {
-        global: 'globalThis', // KEEP THIS if it solves 'global is undefined' errors
+        global: 'globalThis',
       },
-      // You might also need to ensure esbuild can resolve 'stream/promises' if it's involved here
-      // For example, by ensuring 'stream' itself is correctly handled or by explicitly excluding
-      // problematic packages from optimizeDeps if they are the source and should be handled by plugins.
     },
+  },
+  server: {
+    port: 5173,
+    host: '0.0.0.0',
   },
 });

@@ -207,7 +207,7 @@ const JoinRoomModal: React.FC<JoinRoomModalProps> = ({ isOpen, onClose, onJoinSu
     setError(null)
 
     try {
-      const verifyResponse = await fetch("http://localhost:3001/api/nft/scan", {
+      const verifyResponse = await fetch("https://anoghost.onrender.com/api/nft/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

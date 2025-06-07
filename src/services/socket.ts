@@ -5,7 +5,7 @@ import { useEffect, useState } from "react"
 import type { JsonWebKey } from "crypto"
 
 // The URL of your Socket.IO server
-const SOCKET_SERVER_URL = "http://localhost:3001"
+const SOCKET_SERVER_URL = "https://anoghost.onrender.com"
 
 // Define MAX_CHUNK_SIZE
 const MAX_CHUNK_SIZE = 1024 * 1024 // 1MB
