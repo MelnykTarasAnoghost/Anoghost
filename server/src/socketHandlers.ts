@@ -1,5 +1,5 @@
 import type { Server as SocketIOServer, Socket } from "socket.io"
-import { JsonWebKey, randomUUID } from "crypto"
+import { randomUUID } from "crypto"
 import {
   userSessions,
   chatRooms,
@@ -18,10 +18,52 @@ import {
   isRoomCreator,
 } from "./helpers"
 
-import { getGhostId, validateGhostId } from "./ghostIdManager"
+import { getGhostId, validateGhostId, tryDecryptWithRotation, deriveFileDataKey, encryptFileData, decryptFileData } from "./ghostIdManager"
 
 const socketToWalletMap = new Map<string, string>()
 
+interface StoredFile {
+  encryptedData: Buffer | null
+  iv: Buffer
+  authTag: Buffer
+  name: string
+  size: number
+  uploadedAt: number
+  expiresAt: number
+  cleanupTimer: NodeJS.Timeout | null
+  originalFileId: string
+}
+
+interface ChatMessage {
+  id: string
+  sender: string
+  text: string
+  type: "text" | "file"
+  timestamp: number
+  expiresAt?: number
+  encryptedFileId?: string
+  fileName?: string
+  fileSize?: number
+}
+
+const filesStorage = new Map<string, StoredFile>()
+
+const MAX_FILE_SIZE_BYTES = 1024 * 1024 * 1024
+const FILE_EXPIRATION_DURATION_MS = 5 * 60 * 1000
+
+const MASTER_SECRET = process.env.MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
+
+function formatBytes(bytes: number, decimals: number = 2): string {
+  if (bytes === 0) return '0 Bytes'
+
+  const k = 1024
+  const dm = decimals < 0 ? 0 : decimals
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB']
+
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i]
+}
 
 export function setupSocketHandlers(io: SocketIOServer) {
   io.on("connection", (socket: Socket) => {
@@ -47,7 +89,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
           roomTokens: [],
         })
 
-        // Store wallet address for this socket
         socketToWalletMap.set(socket.id, publicKey)
 
         console.log(`User registered: ${sanitizedNickname} (Socket: ${socket.id})`)
@@ -55,7 +96,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
           `[GhostID] Registering user with wallet: ${publicKey.substring(0, 4)}...${publicKey.substring(publicKey.length - 4)}`,
         )
 
-        // Generate Ghost ID for this user
         const masterSecret = process.env.MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
         console.log(
           `[GhostID] Using master secret: ${masterSecret.substring(0, 3)}...${masterSecret.substring(masterSecret.length - 3)}`,
@@ -74,7 +114,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
       }
     })
 
-    // Request Ghost ID refresh
     socket.on("requestGhostId", () => {
       try {
         const publicKey = socketToWalletMap.get(socket.id)
@@ -88,7 +127,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
           `[GhostID] Ghost ID requested for wallet: ${publicKey.substring(0, 4)}...${publicKey.substring(publicKey.length - 4)}`,
         )
 
-        // Generate or retrieve Ghost ID
         const masterSecret = process.env.MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
         const ghostId = getGhostId(publicKey, masterSecret)
 
@@ -100,7 +138,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
       }
     })
 
-    // Force refresh Ghost ID
     socket.on("forceRefreshGhostId", () => {
       try {
         const publicKey = socketToWalletMap.get(socket.id)
@@ -114,7 +151,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
           `[GhostID] Force refresh requested for wallet: ${publicKey.substring(0, 4)}...${publicKey.substring(publicKey.length - 4)}`,
         )
 
-        // Force generate a new Ghost ID
         const masterSecret = process.env.MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
         const ghostId = getGhostId(publicKey, masterSecret, true)
 
@@ -126,7 +162,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
       }
     })
 
-    // Create a new chat room
     socket.on("createChatRoom", (data: { roomName: string; isPrivate: boolean }) => {
       try {
         const userSession = userSessions.get(socket.id)
@@ -146,7 +181,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
         const roomId = randomUUID()
         const roomToken = generateRoomToken(roomId, userSession.publicKey)
 
-        // Create the room
         const newRoom: ChatRoom = {
           id: roomId,
           name: sanitizedRoomName,
@@ -159,7 +193,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
           isPrivate,
         }
 
-        // Add creator as first participant
         newRoom.participants.set(socket.id, {
           socketId: socket.id,
           publicKey: userSession.publicKey,
@@ -167,19 +200,15 @@ export function setupSocketHandlers(io: SocketIOServer) {
           joinedAt: Date.now(),
         })
 
-        // Store the room and update mappings
         chatRooms.set(roomId, newRoom)
         socketToRoomMap.set(socket.id, roomId)
 
-        // Add token to user's session
         userSession.roomTokens.push(roomToken)
 
-        // Join the socket.io room
         socket.join(roomId)
 
         console.log(`Room created: ${sanitizedRoomName} (ID: ${roomId}) by ${userSession.nickname}`)
 
-        // Send room info back to creator (without public keys)
         socket.emit("roomCreated", {
           roomId: newRoom.id,
           roomName: newRoom.name,
@@ -194,7 +223,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
       }
     })
 
-    // Request to join a chat room
     socket.on("requestJoinRoom", (data: { roomId: string; accessToken?: string; ghostId?: string }) => {
       try {
         const { roomId, accessToken, ghostId } = data
@@ -211,22 +239,18 @@ export function setupSocketHandlers(io: SocketIOServer) {
           return
         }
 
-        // Check if user is already in the room
         if (room.participants.has(socket.id)) {
           socket.emit("error", { message: "You are already in this room" })
           return
         }
 
-        // Check if user is already pending
         if (room.pendingParticipants.has(socket.id)) {
           socket.emit("error", { message: "Your join request is already pending" })
           return
         }
 
-        // Check if this user is the original room creator (by public key)
         const isCreator = isOriginalRoomCreator(room, userSession.publicKey)
 
-        // Verify access token if provided
         let hasValidToken = false
         if (accessToken) {
           hasValidToken = room.accessTokens.has(accessToken)
@@ -235,18 +259,15 @@ export function setupSocketHandlers(io: SocketIOServer) {
           }
         }
 
-        // Verify Ghost ID if provided
         let hasValidGhostId = false
         if (ghostId && !hasValidToken) {
           const masterSecret = process.env.MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
           const result = validateGhostId(ghostId, masterSecret)
 
           if (result.isValid && result.walletAddress) {
-            // Check if the Ghost ID belongs to the room creator
             if (result.walletAddress === room.creatorPublicKey) {
               hasValidGhostId = true
 
-              // Generate a token for this user
               const token = generateRoomToken(roomId, userSession.publicKey)
               room.accessTokens.add(token)
               userSession.roomTokens.push(token)
@@ -254,9 +275,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
           }
         }
 
-        // If room is private and user doesn't have a valid token or Ghost ID and is not the creator, add to pending
         if (room.isPrivate && !hasValidToken && !hasValidGhostId && !isCreator) {
-          // Add user to pending participants
           room.pendingParticipants.set(socket.id, {
             socketId: socket.id,
             publicKey: userSession.publicKey,
@@ -264,13 +283,11 @@ export function setupSocketHandlers(io: SocketIOServer) {
             requestedAt: Date.now(),
           })
 
-          // Notify the user their request is pending
           socket.emit("joinRequestPending", {
             roomId: room.id,
             roomName: room.name,
           })
 
-          // Notify room creator about the pending request
           if (room.creatorSocketId) {
             const creatorSocket = io.sockets.sockets.get(room.creatorSocketId)
             if (creatorSocket) {
@@ -285,13 +302,11 @@ export function setupSocketHandlers(io: SocketIOServer) {
           return
         }
 
-        // If user is the original creator, update the creator socket ID
         if (isCreator) {
           console.log(`Original room creator ${userSession.nickname} is rejoining room ${room.name} (ID: ${roomId})`)
           room.creatorSocketId = socket.id
         }
 
-        // If room is not private or user has a valid token or Ghost ID or is the creator, join immediately
         joinRoomDirectly(socket, room, userSession, io)
       } catch (error) {
         console.error("Error in requestJoinRoom:", error)
@@ -299,73 +314,72 @@ export function setupSocketHandlers(io: SocketIOServer) {
       }
     })
 
-    // Approve a join request (room creator only)
     socket.on("approveJoinRequest", (data: { roomId: string; participantId: string }) => {
       try {
-        const { roomId, participantId } = data;
+        const { roomId, participantId } = data
 
-        const userSession = userSessions.get(socket.id);
+        const userSession = userSessions.get(socket.id)
         if (!userSession) {
-          socket.emit("error", { message: "You must be registered" });
-          return;
+          socket.emit("error", { message: "You must be registered" })
+          return
         }
 
-        const room = chatRooms.get(roomId);
+        const room = chatRooms.get(roomId)
         if (!room) {
-          socket.emit("error", { message: "Room not found" });
-          return;
+          socket.emit("error", { message: "Room not found" })
+          return
         }
 
         if (!isRoomCreator(room, socket.id)) {
-          socket.emit("error", { message: "Only the room creator can approve join requests" });
-          return;
+          socket.emit("error", { message: "Only the room creator can approve join requests" })
+          return
         }
 
-        const pendingParticipant = room.pendingParticipants.get(participantId);
+        const pendingParticipant = room.pendingParticipants.get(participantId)
         if (!pendingParticipant) {
-          socket.emit("error", { message: "Participant not found in pending list" });
-          return;
+          socket.emit("error", { message: "Participant not found in pending list" })
+          return
         }
 
-        const participantSocket = io.sockets.sockets.get(participantId);
+        const participantSocket = io.sockets.sockets.get(participantId)
         if (!participantSocket) {
-          room.pendingParticipants.delete(participantId);
+          room.pendingParticipants.delete(participantId)
           socket.emit("pendingJoinRequest", {
             roomId: room.id,
             pendingParticipants: getPendingParticipantsList(room),
-          });
-          return;
+          })
+          return
         }
 
-        const participantSession = userSessions.get(participantId);
+        const participantSession = userSessions.get(participantId)
         if (!participantSession) {
-          room.pendingParticipants.delete(participantId);
+          room.pendingParticipants.delete(participantId)
           socket.emit("pendingJoinRequest", {
             roomId: room.id,
             pendingParticipants: getPendingParticipantsList(room),
-          });
-          return;
+          })
+          return
         }
 
-        const token = generateRoomToken(roomId, participantSession.publicKey);
-        room.accessTokens.add(token);
-        participantSession.roomTokens.push(token);
+        const token = generateRoomToken(roomId, participantSession.publicKey)
+        room.accessTokens.add(token)
+        participantSession.roomTokens.push(token)
 
-        room.pendingParticipants.delete(participantId);
+        room.pendingParticipants.delete(participantId)
 
         room.participants.set(participantId, {
           socketId: participantId,
           publicKey: participantSession.publicKey,
           nickname: participantSession.nickname,
           joinedAt: Date.now(),
-        });
+        })
 
-        socketToRoomMap.set(participantId, roomId);
-        participantSocket.join(roomId);
+        socketToRoomMap.set(participantId, roomId)
+        participantSocket.join(roomId)
 
         console.log(
           `User ${participantSession.nickname} was approved to join room ${room.name} (ID: ${roomId}) by ${userSession.nickname}`,
-        );
+        )
 
         participantSocket.emit("joinRequestApproved", {
           roomId: room.id,
@@ -374,24 +388,23 @@ export function setupSocketHandlers(io: SocketIOServer) {
           participants: getParticipantsList(room),
           isCreator: false,
           pendingParticipants: [],
-        });
+        })
 
         io.to(roomId).emit("userJoinedRoom", {
           roomId: room.id,
           participants: getParticipantsList(room),
-        });
+        })
 
         socket.emit("pendingJoinRequest", {
           roomId: room.id,
           pendingParticipants: getPendingParticipantsList(room),
-        });
+        })
       } catch (error) {
-        console.error("Error in approveJoinRequest:", error);
-        socket.emit("error", { message: "Failed to approve join request" });
+        console.error("Error in approveJoinRequest:", error)
+        socket.emit("error", { message: "Failed to approve join request" })
       }
-    });
+    })
 
-    // Reject a join request (room creator only)
     socket.on("rejectJoinRequest", (data: { roomId: string; participantId: string }) => {
       try {
         const { roomId, participantId } = data
@@ -408,27 +421,23 @@ export function setupSocketHandlers(io: SocketIOServer) {
           return
         }
 
-        // Check if user is the room creator
         if (!isRoomCreator(room, socket.id)) {
           socket.emit("error", { message: "Only the room creator can reject join requests" })
           return
         }
 
-        // Check if the participant is in pending list
         const pendingParticipant = room.pendingParticipants.get(participantId)
         if (!pendingParticipant) {
           socket.emit("error", { message: "Participant not found in pending list" })
           return
         }
 
-        // Remove from pending list
         room.pendingParticipants.delete(participantId)
 
         console.log(
           `Join request from ${pendingParticipant.nickname} was rejected for room ${room.name} (ID: ${roomId}) by ${userSession.nickname}`,
         )
 
-        // Notify the participant they've been rejected
         const participantSocket = io.sockets.sockets.get(participantId)
         if (participantSocket) {
           participantSocket.emit("joinRequestRejected", {
@@ -437,7 +446,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
           })
         }
 
-        // Update the room creator's pending list
         socket.emit("pendingJoinRequest", {
           roomId: room.id,
           pendingParticipants: getPendingParticipantsList(room),
@@ -448,7 +456,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
       }
     })
 
-    // Send a message to the room
     socket.on("sendMessage", (data: { text: string; type?: string; expiresAt?: number }) => {
       try {
         const { text, type = "text", expiresAt } = data
@@ -480,26 +487,21 @@ export function setupSocketHandlers(io: SocketIOServer) {
         const messageId = randomUUID()
         const timestamp = Date.now()
 
-        // Create message object (without public key)
         const message = {
           id: messageId,
           sender: userSession.nickname,
           text: sanitizedText,
           type,
           timestamp,
-          expiresAt, // Include the expiration timestamp
+          expiresAt,
         }
 
-        // Send to everyone in the room including sender
         io.to(roomId).emit("message", message)
 
-        // If message has an expiration, set up automatic deletion
         if (expiresAt) {
           const expirationTime = expiresAt - Date.now()
           if (expirationTime > 0) {
-            // Schedule message expiration
             setTimeout(() => {
-              // Notify all room participants that the message has expired
               io.to(roomId).emit("messageExpired", { messageId })
             }, expirationTime)
           }
@@ -510,7 +512,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
       }
     })
 
-    // Handle large data messages in chunks
     socket.on("startLargeMessage", (data: { totalChunks: number; type: string }) => {
       try {
         const { totalChunks, type } = data
@@ -534,7 +535,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
 
         const messageId = randomUUID()
 
-        // Initialize message chunks tracking
         pendingMessages.set(messageId, {
           id: messageId,
           chunks: new Map(),
@@ -576,15 +576,12 @@ export function setupSocketHandlers(io: SocketIOServer) {
           return
         }
 
-        // Store the chunk
         pendingMessage.chunks.set(chunkIndex, chunk)
         pendingMessage.receivedChunks++
 
-        // Update progress
         const progress = Math.floor((pendingMessage.receivedChunks / pendingMessage.totalChunks) * 100)
         socket.emit("chunkProgress", { messageId, progress })
 
-        // If all chunks received or this is marked as final, process the message
         if (final || pendingMessage.receivedChunks === pendingMessage.totalChunks) {
           const roomId = socketToRoomMap.get(socket.id)
           if (!roomId) {
@@ -598,7 +595,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
             return
           }
 
-          // Combine all chunks in order
           const orderedChunks: Buffer[] = []
           for (let i = 0; i < pendingMessage.totalChunks; i++) {
             const chunk = pendingMessage.chunks.get(i)
@@ -609,7 +605,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
 
           const completeData = Buffer.concat(orderedChunks)
 
-          // Send the complete message to all room participants
           io.to(roomId).emit("largeMessage", {
             id: messageId,
             sender: userSession.nickname,
@@ -617,7 +612,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
             timestamp: pendingMessage.timestamp,
           })
 
-          // Clean up
           pendingMessages.delete(messageId)
         }
       } catch (error) {
@@ -626,9 +620,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
       }
     })
 
-    // Add these new socket event handlers for key exchange
-
-    // Handle public key sharing
     socket.on("sharePublicKey", (data: { roomId: string; publicKeyJwk: string }) => {
       try {
         const { roomId, publicKeyJwk } = data
@@ -645,18 +636,15 @@ export function setupSocketHandlers(io: SocketIOServer) {
           return
         }
 
-        // Broadcast the public key to all room participants
         socket.to(roomId).emit("publicKeyShared", {
           userId: socket.id,
           nickname: userSession.nickname,
           publicKeyJwk,
         })
 
-        // Send all existing public keys to the new participant
         const participants = Array.from(room.participants.values())
         for (const participant of participants) {
           if (participant.socketId !== socket.id) {
-            // Request public key from each participant
             const participantSocket = io.sockets.sockets.get(participant.socketId)
             if (participantSocket) {
               participantSocket.emit("requestPublicKey", {
@@ -672,13 +660,11 @@ export function setupSocketHandlers(io: SocketIOServer) {
       }
     })
 
-    // Handle encrypted messages
     socket.on(
       "sendEncryptedMessage",
-      (data: { encryptedMessages: Record<string, any>; expiresAt?: number; senderId?: string }) => {
+      (data: { encryptedMessages: Record<string, any>; expiresAt?: number; senderId?: string; fileAttachment?: { encryptedFileId: string; fileName: string; fileSize: number } }) => {
         try {
-          const { encryptedMessages, expiresAt } = data
-          // Use the provided sender ID or fall back to the socket ID
+          const { encryptedMessages, expiresAt, fileAttachment } = data
           const senderId = data.senderId || socket.id
 
           const userSession = userSessions.get(socket.id)
@@ -702,40 +688,61 @@ export function setupSocketHandlers(io: SocketIOServer) {
           const messageId = randomUUID()
           const timestamp = Date.now()
 
-          // For each recipient, send their encrypted version of the message
+          if (fileAttachment) {
+            let originalFileId: string
+            try {
+              originalFileId = tryDecryptWithRotation(fileAttachment.encryptedFileId, MASTER_SECRET)
+            } catch (e) {
+              socket.emit("error", { message: "Invalid or malformed file Ghost ID in attachment." })
+              return
+            }
+
+            if (!filesStorage.has(originalFileId)) {
+              socket.emit("error", { message: `Attached file (Ghost ID: ${fileAttachment.encryptedFileId.substring(0,8)}...) not found or expired on server.` })
+              return
+            }
+            console.log(`Validated attached file (Ghost ID: ${fileAttachment.encryptedFileId.substring(0,8)}...) for encrypted message.`)
+          }
+
           for (const [recipientId, encryptedMessage] of Object.entries(encryptedMessages)) {
             const recipientSocket = io.sockets.sockets.get(recipientId)
             if (recipientSocket) {
               recipientSocket.emit("encryptedMessage", {
                 id: messageId,
                 sender: userSession.nickname,
-                senderId: socket.id, // Always use the actual socket ID of the sender
+                senderId: socket.id,
                 encryptedContent: encryptedMessage,
                 timestamp,
-                expiresAt, // Include the expiration timestamp
+                expiresAt,
+                fileAttachment: fileAttachment ? {
+                  encryptedFileId: fileAttachment.encryptedFileId,
+                  fileName: fileAttachment.fileName,
+                  fileSize: fileAttachment.fileSize,
+                } : undefined,
               })
             }
           }
 
-          // Also send to the sender (their own encrypted version)
           if (encryptedMessages[socket.id]) {
             socket.emit("encryptedMessage", {
               id: messageId,
               sender: userSession.nickname,
-              senderId: socket.id, // Always use the actual socket ID of the sender
+              senderId: socket.id,
               encryptedContent: encryptedMessages[socket.id],
               timestamp,
-              expiresAt, // Include the expiration timestamp
+              expiresAt,
+              fileAttachment: fileAttachment ? {
+                encryptedFileId: fileAttachment.encryptedFileId,
+                fileName: fileAttachment.fileName,
+                fileSize: fileAttachment.fileSize,
+              } : undefined,
             })
           }
 
-          // If message has an expiration, set up automatic deletion
           if (expiresAt) {
             const expirationTime = expiresAt - Date.now()
             if (expirationTime > 0) {
-              // Schedule message expiration
               setTimeout(async () => {
-                // Notify all recipients that the message has expired
                 for (const recipientId of Object.keys(encryptedMessages)) {
                   const recipientSocket = io.sockets.sockets.get(recipientId)
                   if (recipientSocket) {
@@ -752,7 +759,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
       },
     )
 
-    // Handle public key requests
     socket.on("requestPublicKey", (data: { requesterId: string }) => {
       try {
         const { requesterId } = data
@@ -762,10 +768,8 @@ export function setupSocketHandlers(io: SocketIOServer) {
           return
         }
 
-        // Get the requester's socket
         const requesterSocket = io.sockets.sockets.get(requesterId)
         if (requesterSocket) {
-          // The client will need to respond to this event by sharing their public key
           socket.emit("publicKeyRequested", {
             requesterId,
           })
@@ -775,7 +779,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
       }
     })
 
-    // Handle typing status
     socket.on("userTyping", (data: { roomId: string }) => {
       try {
         const { roomId } = data
@@ -790,7 +793,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
           return
         }
 
-        // Broadcast to all other users in the room that this user is typing
         socket.to(roomId).emit("userTypingStatus", {
           userId: socket.id,
           nickname: userSession.nickname,
@@ -815,7 +817,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
           return
         }
 
-        // Broadcast to all other users in the room that this user stopped typing
         socket.to(roomId).emit("userTypingStatus", {
           userId: socket.id,
           nickname: userSession.nickname,
@@ -826,7 +827,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
       }
     })
 
-    // Handle disconnection
     socket.on("disconnect", (reason: string) => {
       try {
         console.log(`Client disconnected: ${socket.id}, reason: ${reason}`)
@@ -839,24 +839,19 @@ export function setupSocketHandlers(io: SocketIOServer) {
             if (participant) {
               room.participants.delete(socket.id)
 
-              // Notify others in the room
               socket.to(roomId).emit("userLeftRoom", {
                 nickname: participant.nickname,
                 participants: getParticipantsList(room),
               })
 
-              // If this was the room creator, assign a new creator or close the room
               if (isRoomCreator(room, socket.id)) {
-                // Get the oldest participant to be the new creator
                 const participants = Array.from(room.participants.values())
                 if (participants.length > 0) {
-                  // Sort by join time and pick the oldest
                   participants.sort((a, b) => a.joinedAt - b.joinedAt)
                   const newCreator = participants[0]
                   room.creatorSocketId = newCreator.socketId
                   room.creatorPublicKey = newCreator.publicKey
 
-                  // Notify the new creator
                   const newCreatorSocket = io.sockets.sockets.get(newCreator.socketId)
                   if (newCreatorSocket) {
                     newCreatorSocket.emit("roomCreatorChanged", {
@@ -866,7 +861,6 @@ export function setupSocketHandlers(io: SocketIOServer) {
                     })
                   }
 
-                  // Notify all participants about the change
                   io.to(roomId).emit("message", {
                     id: randomUUID(),
                     sender: "system",
@@ -874,18 +868,15 @@ export function setupSocketHandlers(io: SocketIOServer) {
                     timestamp: Date.now(),
                   })
                 } else {
-                  // No participants left, clean up the room
                   chatRooms.delete(roomId)
                   console.log(`Room ${room.name} (ID: ${roomId}) is empty and has been removed.`)
                 }
               }
             }
 
-            // Also check if user was in pending participants
             if (room.pendingParticipants.has(socket.id)) {
               room.pendingParticipants.delete(socket.id)
 
-              // Notify room creator about updated pending list
               if (room.creatorSocketId) {
                 const creatorSocket = io.sockets.sockets.get(room.creatorSocketId)
                 if (creatorSocket) {
@@ -900,13 +891,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
           socketToRoomMap.delete(socket.id)
         }
 
-        // Clean up user session
         userSessions.delete(socket.id)
 
-        // Remove from wallet map
         socketToWalletMap.delete(socket.id)
 
-        // Clean up any pending large messages from this user
         for (const [messageId, message] of pendingMessages.entries()) {
           if (message.senderId === socket.id) {
             pendingMessages.delete(messageId)
@@ -917,42 +905,10 @@ export function setupSocketHandlers(io: SocketIOServer) {
       }
     })
 
-    // Handle errors
     socket.on("error", (error: Error) => {
       console.error(`Socket error for ${socket.id}:`, error.message)
     })
 
-    // Add this to the setupSocketHandlers function, inside the io.on("connection", (socket: Socket) => { ... }) block
-    // socket.on(
-    //   "generateMockNft",
-    //   (data: {
-    //     name?: string
-    //     description?: string
-    //     collectionIndex?: number
-    //     attributes?: Array<{ trait_type: string; value: string }>
-    //   }) => {
-    //     try {
-    //       const userSession = userSessions.get(socket.id)
-    //       if (!userSession) {
-    //         socket.emit("error", { message: "You must register before generating NFTs" })
-    //         return
-    //       }
-
-    //       // Generate a mock NFT
-    //       const nft = generateMockNft(userSession.publicKey, data)
-
-    //       // Return the generated NFT
-    //       socket.emit("mockNftGenerated", { nft })
-
-    //       console.log(`Mock NFT generated for ${userSession.nickname}: ${nft.name} (${nft.mint})`)
-    //     } catch (error) {
-    //       console.error("Error generating mock NFT:", error)
-    //       socket.emit("error", { message: "Failed to generate mock NFT" })
-    //     }
-    //   },
-    // )
-
-    // Validate Ghost ID
     socket.on("validateGhostId", async (data: { ghostId: string }) => {
       try {
         const { ghostId } = data
@@ -968,21 +924,17 @@ export function setupSocketHandlers(io: SocketIOServer) {
 
         console.log(`[GhostID] Validation requested for Ghost ID: ${ghostId.substring(0, 8)}...`)
 
-        // Attempt to decrypt and validate the Ghost ID
         const masterSecret = process.env.MASTER_SECRET || "ANOGHOST_MASTER_SECRET_DEMO_ONLY"
         const result = validateGhostId(ghostId, masterSecret)
 
         if (result.isValid && result.walletAddress) {
-          // Success - emit the result without the actual wallet address for security
           console.log(`[GhostID] Validation successful for Ghost ID: ${ghostId.substring(0, 8)}...`)
           socket.emit("ghostIdValidationResult", {
             success: true,
             isValid: true,
-            // Only send a truncated version
             walletPreview: `${result.walletAddress.substring(0, 4)}...${result.walletAddress.substring(result.walletAddress.length - 4)}`,
           })
         } else {
-          // Failed to decrypt
           console.error(`[GhostID] Validation failed: ${result.error}`)
           socket.emit("ghostIdValidationResult", {
             success: false,
@@ -1001,9 +953,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
   })
 }
 
-// Join a room directly (internal function)
 function joinRoomDirectly(socket: Socket, room: ChatRoom, userSession: UserSession, io: SocketIOServer) {
-  // Leave current room if in one
   const currentRoomId = socketToRoomMap.get(socket.id)
   if (currentRoomId) {
     const currentRoom = chatRooms.get(currentRoomId)
@@ -1011,7 +961,6 @@ function joinRoomDirectly(socket: Socket, room: ChatRoom, userSession: UserSessi
       currentRoom.participants.delete(socket.id)
       socket.leave(currentRoomId)
 
-      // Notify others in the room
       socket.to(currentRoomId).emit("userLeftRoom", {
         nickname: userSession.nickname,
         participants: getParticipantsList(currentRoom),
@@ -1020,7 +969,6 @@ function joinRoomDirectly(socket: Socket, room: ChatRoom, userSession: UserSessi
     socketToRoomMap.delete(socket.id)
   }
 
-  // Join the new room
   room.participants.set(socket.id, {
     socketId: socket.id,
     publicKey: userSession.publicKey,
@@ -1031,12 +979,10 @@ function joinRoomDirectly(socket: Socket, room: ChatRoom, userSession: UserSessi
   socketToRoomMap.set(socket.id, room.id)
   socket.join(room.id)
 
-  // Check if this user is the room creator (either by socket ID or public key)
   const isCreator = isRoomCreator(room, socket.id) || isOriginalRoomCreator(room, userSession.publicKey)
 
   console.log(`User ${userSession.nickname} joined room ${room.name} (ID: ${room.id}), isCreator: ${isCreator}`)
 
-  // Notify the user they've joined
   socket.emit("roomJoined", {
     roomId: room.id,
     roomName: room.name,
@@ -1045,7 +991,6 @@ function joinRoomDirectly(socket: Socket, room: ChatRoom, userSession: UserSessi
     pendingParticipants: isCreator ? getPendingParticipantsList(room) : [],
   })
 
-  // Notify others in the room
   socket.to(room.id).emit("userJoinedRoom", {
     nickname: userSession.nickname,
     participants: getParticipantsList(room),

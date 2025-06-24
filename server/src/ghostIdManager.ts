@@ -203,3 +203,31 @@ export function decryptTimelessGhostId(timelessGhostId: string, masterSecret: st
         throw new Error('Failed to decrypt timelessGhostId. Check masterSecret or ghostId integrity.');
     }
 }
+
+const FILE_ENCRYPTION_KEY_LENGTH = 32
+const FILE_ENCRYPTION_IV_LENGTH = 16
+
+export function deriveFileDataKey(masterSecret: string, fileId: string): Buffer {
+  const salt = Buffer.from(fileId, 'utf8')
+  const info = Buffer.from('file-data-encryption-key', 'utf8')
+  // @ts-ignore
+  return crypto.hkdfSync('sha256', Buffer.from(masterSecret, 'utf8'), salt, info, FILE_ENCRYPTION_KEY_LENGTH)
+}
+
+export function encryptFileData(fileData: Buffer, key: Buffer): { encryptedContent: Buffer; iv: Buffer; authTag: Buffer } {
+  const iv = crypto.randomBytes(FILE_ENCRYPTION_IV_LENGTH)
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
+
+  const encryptedContent = Buffer.concat([cipher.update(fileData), cipher.final()])
+  const authTag = cipher.getAuthTag()
+
+  return { encryptedContent, iv, authTag }
+}
+
+export function decryptFileData(encryptedContent: Buffer, iv: Buffer, authTag: Buffer, key: Buffer): Buffer {
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv)
+  decipher.setAuthTag(authTag)
+
+  const decryptedContent = Buffer.concat([decipher.update(encryptedContent), decipher.final()])
+  return decryptedContent
+}

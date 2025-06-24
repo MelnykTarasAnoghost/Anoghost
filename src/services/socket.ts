@@ -4,9 +4,9 @@ import { io, type Socket } from "socket.io-client"
 import { useEffect, useState } from "react"
 import type { JsonWebKey } from "crypto"
 
-// The URL of your Socket.IO server
-const SOCKET_SERVER_URL = "https://anoghost.onrender.com"
+const SOCKET_SERVER_URL = import.meta.env.VITE_API_URL
 
+console.log(SOCKET_SERVER_URL)
 // Define MAX_CHUNK_SIZE
 const MAX_CHUNK_SIZE = 1024 * 1024 // 1MB
 

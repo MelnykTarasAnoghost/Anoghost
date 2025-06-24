@@ -24,7 +24,7 @@ const mintNftAccessPasses = async (
   roomName: string,
   ghostIds: string[]
 ): Promise<MintResponse["nfts"]> => {
-  const res = await fetch(`https://anoghost.onrender.com/api/mint`, {
+  const res = await fetch(`${import.meta.env.VITE_API_URL}/api/mint`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

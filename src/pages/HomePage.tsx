@@ -187,9 +187,9 @@ const HomePage = () => {
       {/* Hero Section */}
       <div className="relative min-h-screen flex items-center justify-center pt-24">
         {/* Background circles */}
-        <div className="absolute w-[800px] h-[800px] rounded-full border border-[#333333] opacity-20 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"></div>
-        <div className="absolute w-[600px] h-[600px] rounded-full border border-[#333333] opacity-20 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"></div>
-        <div className="absolute w-[400px] h-[400px] rounded-full border border-[#333333] opacity-20 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"></div>
+        <div className="absolute w-[800px] h-[800px] bg-gradient-to-tr from-[#FF4D00] to-transparent blur-2xl rounded-full border border-[#333333] opacity-20 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"></div>
+        <div className="absolute w-[600px] h-[600px] bg-gradient-to-br from-[#521a01] to-transparent blur-xl rounded-full border border-[#333333] opacity-20 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"></div>
+        <div className="absolute w-[400px] h-[400px] bg-gradient-to-r from-[#2b0e01] to-transparent blur-lg rounded-full border border-[#333333] opacity-20 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2"></div>
 
         {/* Stats */}
         <div className="absolute top-1/2 left-[10%] transform -translate-y-1/2 text-left">
