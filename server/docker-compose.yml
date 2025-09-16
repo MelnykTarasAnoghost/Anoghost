@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  server:
+    container_name: anoghost_server
+    build: .
+    env_file:
+      - .env
+    expose:
+      - "3003"
+    networks:
+      - anoghost_net
+      - voice_network
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+
+networks:
+  anoghost_net:
+    driver: bridge
+  voice_network:
+    external: true
